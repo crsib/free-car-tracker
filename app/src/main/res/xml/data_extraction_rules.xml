@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Encrypted with a device-bound key; cannot be restored elsewhere. -->
+        <exclude domain="sharedpref" path="webdav_secure.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="webdav_secure.xml" />
+    </device-transfer>
+</data-extraction-rules>
