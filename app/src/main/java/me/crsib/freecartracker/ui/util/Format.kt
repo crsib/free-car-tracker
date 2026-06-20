@@ -28,6 +28,12 @@ fun formatMoney(minor: Long, currencyCode: String): String {
     return nf.format(Money.minorToMajor(minor, currencyCode))
 }
 
+/** Short label for a dashboard window length, e.g. "30d" or "All time". */
+fun windowLabel(days: Int): String = if (days <= 0) "All time" else "${days}d"
+
+/** Longer label for a window length used in menus, e.g. "Last 30 days" or "All time". */
+fun windowMenuLabel(days: Int): String = if (days <= 0) "All time" else "Last $days days"
+
 /** Format a number with up to [decimals] fraction digits, trimming trailing zeros. */
 fun formatNumber(value: Double, decimals: Int = 1): String {
     val nf = NumberFormat.getNumberInstance(Locale.getDefault()).apply {

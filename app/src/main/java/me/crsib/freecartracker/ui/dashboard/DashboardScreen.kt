@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -17,6 +18,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -30,18 +32,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.data.entity.Vehicle
+import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
+import me.crsib.freecartracker.domain.model.Powertrain
 import me.crsib.freecartracker.ui.components.Sparkline
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.costBucketLabel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatMoney
 import me.crsib.freecartracker.ui.util.formatNumber
+import me.crsib.freecartracker.ui.util.icon
+import me.crsib.freecartracker.ui.util.windowLabel
+import me.crsib.freecartracker.ui.util.windowMenuLabel
 import kotlin.math.roundToLong
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,6 +76,14 @@ fun DashboardScreen(
                         )
                     } else {
                         Text("Dashboard")
+                    }
+                },
+                actions = {
+                    if (state.selected != null) {
+                        WindowSelector(
+                            windowDays = state.windowDays,
+                            onSelect = vm::setWindowDays,
+                        )
                     }
                 },
             )
@@ -119,7 +135,7 @@ fun DashboardScreen(
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     KpiCard(
-                        title = "Spent (${state.windowDays}d)",
+                        title = "Spent (${windowLabel(state.windowDays)})",
                         value = formatMoney(state.totalSpendMinor, vehicle.currency),
                         unit = "",
                         modifier = Modifier.weight(1f),
@@ -131,6 +147,10 @@ fun DashboardScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+            }
+
+            item {
+                PeriodStatsCard(state = state, vehicle = vehicle)
             }
 
             if (state.trend.size >= 2) {
@@ -233,6 +253,119 @@ private fun VehicleSwitcher(
 }
 
 @Composable
+private fun WindowSelector(windowDays: Int, onSelect: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { open = true }) {
+            Text(windowLabel(windowDays))
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Change period")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            AppPreferences.WINDOW_OPTIONS.forEach { days ->
+                DropdownMenuItem(
+                    text = { Text(windowMenuLabel(days)) },
+                    onClick = { open = false; onSelect(days) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PeriodStatsCard(state: DashboardUiState, vehicle: Vehicle) {
+    val system = vehicle.unitSystem
+
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "Period statistics (${windowLabel(state.windowDays)})",
+                style = MaterialTheme.typography.labelLarge,
+            )
+            StatRow(
+                "Distance travelled",
+                state.windowDistanceKm
+                    ?.let { "${formatNumber(UnitConversions.kmToDisplay(it, system), 0)} ${UnitConversions.distanceUnit(system)}" }
+                    ?: "—",
+            )
+
+            if (vehicle.powertrain.usesFuel) {
+                val economies = state.windowSegmentEconomiesL100
+                    .mapNotNull { UnitConversions.fuelEconomyToDisplay(it, system) }
+                val ecoUnit = UnitConversions.fuelEconomyUnit(system)
+                StatSectionHeader(EntryKind.FUEL.icon(), "Fuel")
+                StatRow(
+                    "Used (total)",
+                    state.windowFuelVolumeL.takeIf { it > 0.0 }
+                        ?.let { "${formatNumber(UnitConversions.litresToDisplay(it, system), 1)} ${UnitConversions.volumeUnit(system)}" }
+                        ?: "—",
+                )
+                StatRow(
+                    "Consumption (avg)",
+                    economies.takeIf { it.isNotEmpty() }
+                        ?.let { "${formatNumber(it.average(), 1)} $ecoUnit" } ?: "—",
+                )
+                StatRow(
+                    "Consumption (min / max)",
+                    if (economies.isEmpty()) "—"
+                    else "${formatNumber(economies.min(), 1)} / ${formatNumber(economies.max(), 1)} $ecoUnit",
+                )
+            }
+
+            if (vehicle.powertrain == Powertrain.REV) {
+                val electric = state.windowSegmentElectricKwh100
+                    .mapNotNull { UnitConversions.electricEconomyToDisplay(it, system) }
+                val elUnit = UnitConversions.electricEconomyUnit(system)
+                StatSectionHeader(EntryKind.CHARGE.icon(), "Electricity")
+                StatRow(
+                    "Used (total)",
+                    state.windowEnergyKwh.takeIf { it > 0.0 }
+                        ?.let { "${formatNumber(it, 1)} kWh" } ?: "—",
+                )
+                StatRow(
+                    "Consumption (avg)",
+                    electric.takeIf { it.isNotEmpty() }
+                        ?.let { "${formatNumber(it.average(), 1)} $elUnit" } ?: "—",
+                )
+                StatRow(
+                    "Consumption (min / max)",
+                    if (electric.isEmpty()) "—"
+                    else "${formatNumber(electric.min(), 1)} / ${formatNumber(electric.max(), 1)} $elUnit",
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatSectionHeader(icon: ImageVector, title: String) {
+    HorizontalDivider(Modifier.padding(top = 12.dp))
+    Row(
+        Modifier.fillMaxWidth().padding(top = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun StatRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(value, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
 private fun KpiCard(title: String, value: String, unit: String, modifier: Modifier = Modifier) {
     ElevatedCard(modifier = modifier) {
         Column(Modifier.padding(16.dp)) {
@@ -251,7 +384,13 @@ private fun RecentRow(item: RecentItem, onClick: () -> Unit) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Icon(
+                item.kind.icon(),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
             Column(Modifier.weight(1f)) {
                 Text(costBucketLabel(item.title), fontWeight = FontWeight.Medium)
                 Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)

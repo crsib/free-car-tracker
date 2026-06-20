@@ -19,6 +19,24 @@ data class FuelSegment(
     val litresPer100Km: Double get() = litres / distanceKm * 100.0
 }
 
+/** A single charge, in canonical units, fed to the energy-economy calculator. */
+data class ChargePoint(
+    val odometerKm: Double?,
+    val energyKwh: Double,
+    val dateMillis: Long,
+)
+
+/** A computed energy-economy interval between two consecutive odometer-bearing charges. */
+data class ChargeSegment(
+    val startOdometerKm: Double,
+    val endOdometerKm: Double,
+    val distanceKm: Double,
+    val kwh: Double,
+    val endDateMillis: Long,
+) {
+    val kwhPer100Km: Double get() = kwh / distanceKm * 100.0
+}
+
 /**
  * Pure fuel/energy economy maths. Storage units are canonical (km, litres, kWh), so this
  * class is Android-free and unit-tested.
@@ -69,6 +87,30 @@ object EconomyCalculator {
     /** Economy (L/100km) of the most recent completed full-to-full interval, if any. */
     fun latestFuelEconomyL100(points: List<FuelPoint>): Double? =
         fuelSegments(points).maxByOrNull { it.endDateMillis }?.litresPer100Km
+
+    /**
+     * Per-interval energy economy between consecutive odometer-bearing charges: distance is the
+     * odometer delta and energy is what was added at the *closing* charge (replenishing what the
+     * interval consumed). Charges without an odometer or energy are ignored; non-positive-distance
+     * intervals are skipped.
+     */
+    fun chargeSegments(points: List<ChargePoint>): List<ChargeSegment> {
+        val ordered = points
+            .filter { it.odometerKm != null }
+            .sortedWith(compareBy({ it.odometerKm }, { it.dateMillis }))
+        if (ordered.size < 2) return emptyList()
+
+        val segments = mutableListOf<ChargeSegment>()
+        for (i in 1..ordered.lastIndex) {
+            val start = ordered[i - 1].odometerKm!!
+            val end = ordered[i].odometerKm!!
+            val distance = end - start
+            if (distance > 0.0 && ordered[i].energyKwh > 0.0) {
+                segments += ChargeSegment(start, end, distance, ordered[i].energyKwh, ordered[i].dateMillis)
+            }
+        }
+        return segments
+    }
 
     /**
      * Distance covered by a set of odometer readings (km): the span between the smallest and

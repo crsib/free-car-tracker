@@ -46,6 +46,13 @@ class AppPreferences(private val context: Context) {
 
     companion object {
         const val DEFAULT_WINDOW_DAYS = 30
+
+        /** Sentinel window meaning "every entry, no date cut-off". */
+        const val ALL_TIME_DAYS = 0
+
+        /** Window lengths offered in the UI (days); [ALL_TIME_DAYS] is "all time". */
+        val WINDOW_OPTIONS = listOf(7, 14, 30, 60, 90, ALL_TIME_DAYS)
+
         private val KEY_SELECTED_VEHICLE = longPreferencesKey("selected_vehicle_id")
         private val KEY_DASHBOARD_DAYS = intPreferencesKey("dashboard_window_days")
         private val KEY_THEME_MODE = stringPreferencesKey("theme_mode")

@@ -14,6 +14,7 @@ import me.crsib.freecartracker.data.dao.CategoryTotal
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.repository.EntryRepository
+import me.crsib.freecartracker.domain.ChargePoint
 import me.crsib.freecartracker.domain.EconomyCalculator
 import me.crsib.freecartracker.domain.FuelPoint
 import me.crsib.freecartracker.domain.RecurrenceProjector
@@ -39,6 +40,12 @@ data class DashboardUiState(
     val windowFuelEconomyL100: Double? = null,
     val electricEconomyKwh100: Double? = null,
     val windowDistanceKm: Double? = null,
+    val windowFuelVolumeL: Double = 0.0,
+    /** Per-segment fuel economy (L/100km) for completed intervals within the window. */
+    val windowSegmentEconomiesL100: List<Double> = emptyList(),
+    val windowEnergyKwh: Double = 0.0,
+    /** Per-segment energy economy (kWh/100km) for completed charge intervals within the window. */
+    val windowSegmentElectricKwh100: List<Double> = emptyList(),
     val totalSpendMinor: Long = 0,
     val costPerKmMinor: Double? = null,
     val buckets: List<CategoryTotal> = emptyList(),
@@ -77,7 +84,8 @@ class DashboardViewModel(
             entryRepo.observeExpenses(vehicle.id),
         ) { fuel, charge, expenses ->
             val now = System.currentTimeMillis()
-            val since = now - days.toLong() * 24L * 60L * 60L * 1000L
+            // ALL_TIME_DAYS (0) means no lower bound, so every entry counts.
+            val since = if (days <= 0) Long.MIN_VALUE else now - days.toLong() * 24L * 60L * 60L * 1000L
 
             val fuelPoints = fuel.map {
                 FuelPoint(it.odometerKm, it.volumeL, it.isFullTank, it.dateMillis)
@@ -114,9 +122,18 @@ class DashboardViewModel(
                 expenseBuckets.forEach { (key, value) -> add(CategoryTotal(key, value)) }
             }.sortedByDescending { it.totalMinor }
 
-            val trend = EconomyCalculator.fuelSegments(fuelPoints)
+            val segments = EconomyCalculator.fuelSegments(fuelPoints)
+            val trend = segments
                 .map { TrendPoint(it.endDateMillis, it.litresPer100Km) }
                 .takeLast(12)
+            val windowSegmentEconomies = segments
+                .filter { it.endDateMillis >= since }
+                .map { it.litresPer100Km }
+
+            val chargePoints = charge.map { ChargePoint(it.odometerKm, it.energyKwh, it.dateMillis) }
+            val windowElectricEconomies = EconomyCalculator.chargeSegments(chargePoints)
+                .filter { it.endDateMillis >= since }
+                .map { it.kwhPer100Km }
 
             DashboardUiState(
                 loading = false,
@@ -127,6 +144,10 @@ class DashboardViewModel(
                 windowFuelEconomyL100 = EconomyCalculator.per100Km(windowFuelL, windowDistance),
                 electricEconomyKwh100 = EconomyCalculator.per100Km(windowKwh, windowDistance),
                 windowDistanceKm = windowDistance,
+                windowFuelVolumeL = windowFuelL,
+                windowSegmentEconomiesL100 = windowSegmentEconomies,
+                windowEnergyKwh = windowKwh,
+                windowSegmentElectricKwh100 = windowElectricEconomies,
                 totalSpendMinor = total,
                 costPerKmMinor = EconomyCalculator.costPerKmMinor(total, windowDistance),
                 buckets = buckets,
@@ -136,6 +157,8 @@ class DashboardViewModel(
         }
 
     fun selectVehicle(id: Long) = viewModelScope.launch { selection.select(id) }
+
+    fun setWindowDays(days: Int) = viewModelScope.launch { prefs.setDashboardWindowDays(days) }
 
     private fun recentItems(
         fuel: List<me.crsib.freecartracker.data.entity.FuelEntry>,

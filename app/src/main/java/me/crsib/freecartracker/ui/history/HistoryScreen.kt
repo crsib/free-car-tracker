@@ -37,6 +37,7 @@ import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatMoney
 import me.crsib.freecartracker.ui.util.formatMonthYear
+import me.crsib.freecartracker.ui.util.icon
 
 private fun EntryKind.chip() = when (this) {
     EntryKind.FUEL -> "Fuel"
@@ -126,7 +127,13 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Icon(
+                item.kind.icon(),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
             Column(Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.Medium)
                 if (item.subtitle.isNotBlank()) {

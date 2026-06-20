@@ -46,7 +46,6 @@ fun SettingsScreen(
     onOpenWebDav: () -> Unit,
 ) {
     val vm = containerViewModel { c -> SettingsViewModel(c.preferences, c.backupRepository, c.vehicleSelection) }
-    val windowDays by vm.windowDays.collectAsStateWithLifecycle()
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -122,25 +121,6 @@ fun SettingsScreen(
                                 selected = themeMode == mode,
                                 onClick = { vm.setThemeMode(mode) },
                                 label = { Text(themeModeLabel(mode)) },
-                            )
-                        }
-                    }
-                }
-            }
-
-            ElevatedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Dashboard window", style = MaterialTheme.typography.titleMedium)
-                    Text("Period used for spend and consumption totals.", style = MaterialTheme.typography.bodySmall)
-                    Row(
-                        Modifier.padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        listOf(7, 14, 30, 60, 90).forEach { days ->
-                            FilterChip(
-                                selected = windowDays == days,
-                                onClick = { vm.setWindowDays(days) },
-                                label = { Text("${days}d") },
                             )
                         }
                     }

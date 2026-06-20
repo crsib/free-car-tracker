@@ -19,15 +19,6 @@ class SettingsViewModel(
     private val vehicleSelection: VehicleSelection,
 ) : ViewModel() {
 
-    val windowDays: StateFlow<Int> =
-        prefs.dashboardWindowDays.stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            AppPreferences.DEFAULT_WINDOW_DAYS,
-        )
-
-    fun setWindowDays(days: Int) = viewModelScope.launch { prefs.setDashboardWindowDays(days) }
-
     val themeMode: StateFlow<ThemeMode> =
         prefs.themeMode.stateIn(
             viewModelScope,
