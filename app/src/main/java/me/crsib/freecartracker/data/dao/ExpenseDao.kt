@@ -20,6 +20,9 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE id = :id")
     suspend fun getById(id: Long): Expense?
 
+    @Query("SELECT MAX(odometerKm) FROM expenses WHERE vehicleId = :vehicleId")
+    suspend fun maxOdometer(vehicleId: Long): Double?
+
     @Query("SELECT * FROM expenses ORDER BY id")
     suspend fun getAll(): List<Expense>
 

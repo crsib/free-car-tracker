@@ -20,6 +20,9 @@ interface ChargeEntryDao {
     @Query("SELECT * FROM charge_entries WHERE id = :id")
     suspend fun getById(id: Long): ChargeEntry?
 
+    @Query("SELECT MAX(odometerKm) FROM charge_entries WHERE vehicleId = :vehicleId")
+    suspend fun maxOdometer(vehicleId: Long): Double?
+
     @Query("SELECT * FROM charge_entries ORDER BY id")
     suspend fun getAll(): List<ChargeEntry>
 

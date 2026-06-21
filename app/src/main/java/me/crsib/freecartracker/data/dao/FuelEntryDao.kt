@@ -24,6 +24,12 @@ interface FuelEntryDao {
     @Query("SELECT * FROM fuel_entries WHERE id = :id")
     suspend fun getById(id: Long): FuelEntry?
 
+    @Query("SELECT MAX(odometerKm) FROM fuel_entries WHERE vehicleId = :vehicleId")
+    suspend fun maxOdometer(vehicleId: Long): Double?
+
+    @Query("SELECT * FROM fuel_entries WHERE vehicleId = :vehicleId ORDER BY dateMillis DESC, id DESC LIMIT 1")
+    suspend fun latest(vehicleId: Long): FuelEntry?
+
     @Query("SELECT * FROM fuel_entries ORDER BY id")
     suspend fun getAll(): List<FuelEntry>
 

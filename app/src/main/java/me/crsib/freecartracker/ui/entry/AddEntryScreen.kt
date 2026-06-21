@@ -47,6 +47,9 @@ private fun EntryKind.label() = when (this) {
     EntryKind.EXPENSE -> "Expense"
 }
 
+private fun formatOdometer(value: Double): String =
+    if (value == value.toLong().toDouble()) value.toLong().toString() else "%,.0f".format(value)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEntryScreen(
@@ -67,6 +70,9 @@ fun AddEntryScreen(
     val dUnit = system?.let { UnitConversions.distanceUnit(it) } ?: ""
     val vUnit = system?.let { UnitConversions.volumeUnit(it) } ?: ""
     val currency = vehicle?.currency ?: ""
+    val lastOdometerHint = state.lastOdometerKm?.let { km ->
+        system?.let { "Last: ${formatOdometer(UnitConversions.kmToDisplay(km, it))} $dUnit" }
+    }
 
     Scaffold(
         topBar = {
@@ -103,7 +109,7 @@ fun AddEntryScreen(
                     state.allowedKinds.forEach { kind ->
                         FilterChip(
                             selected = state.kind == kind,
-                            onClick = { vm.update { it.copy(kind = kind) } },
+                            onClick = { vm.setKind(kind) },
                             label = { Text(kind.label()) },
                         )
                     }
@@ -124,11 +130,12 @@ fun AddEntryScreen(
                         keyboardType = KeyboardType.Decimal,
                         suffix = dUnit,
                         isError = state.odometer.toDoubleOrNull() == null,
+                        supportingText = lastOdometerHint,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         LabeledTextField(
                             value = state.volume,
-                            onValueChange = { v -> vm.update { it.copy(volume = v) } },
+                            onValueChange = { v -> vm.editCostField(CostField.QUANTITY, v) },
                             label = "Volume",
                             keyboardType = KeyboardType.Decimal,
                             suffix = vUnit,
@@ -136,13 +143,20 @@ fun AddEntryScreen(
                         )
                         LabeledTextField(
                             value = state.totalCost,
-                            onValueChange = { v -> vm.update { it.copy(totalCost = v) } },
+                            onValueChange = { v -> vm.editCostField(CostField.TOTAL, v) },
                             label = "Total cost",
                             keyboardType = KeyboardType.Decimal,
                             suffix = currency,
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    LabeledTextField(
+                        value = state.pricePerUnit,
+                        onValueChange = { v -> vm.editCostField(CostField.PRICE, v) },
+                        label = "Price per $vUnit",
+                        keyboardType = KeyboardType.Decimal,
+                        suffix = if (currency.isNotEmpty()) "$currency/$vUnit" else null,
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -175,14 +189,16 @@ fun AddEntryScreen(
                     LabeledTextField(
                         value = state.odometer,
                         onValueChange = { v -> vm.update { it.copy(odometer = v) } },
-                        label = "Odometer (optional)",
+                        label = "Odometer",
                         keyboardType = KeyboardType.Decimal,
                         suffix = dUnit,
+                        isError = state.odometer.toDoubleOrNull() == null,
+                        supportingText = lastOdometerHint,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         LabeledTextField(
                             value = state.energyKwh,
-                            onValueChange = { v -> vm.update { it.copy(energyKwh = v) } },
+                            onValueChange = { v -> vm.editCostField(CostField.QUANTITY, v) },
                             label = "Energy",
                             keyboardType = KeyboardType.Decimal,
                             suffix = "kWh",
@@ -190,13 +206,20 @@ fun AddEntryScreen(
                         )
                         LabeledTextField(
                             value = state.totalCost,
-                            onValueChange = { v -> vm.update { it.copy(totalCost = v) } },
+                            onValueChange = { v -> vm.editCostField(CostField.TOTAL, v) },
                             label = "Total cost",
                             keyboardType = KeyboardType.Decimal,
                             suffix = currency,
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    LabeledTextField(
+                        value = state.pricePerUnit,
+                        onValueChange = { v -> vm.editCostField(CostField.PRICE, v) },
+                        label = "Price per kWh",
+                        keyboardType = KeyboardType.Decimal,
+                        suffix = if (currency.isNotEmpty()) "$currency/kWh" else null,
+                    )
                     EnumDropdown(
                         label = "Charge type",
                         options = ChargeType.entries,
@@ -257,9 +280,10 @@ fun AddEntryScreen(
                         LabeledTextField(
                             value = state.odometer,
                             onValueChange = { v -> vm.update { it.copy(odometer = v) } },
-                            label = "Odometer",
+                            label = "Odometer (optional)",
                             keyboardType = KeyboardType.Decimal,
                             suffix = dUnit,
+                            supportingText = lastOdometerHint,
                             modifier = Modifier.weight(1f),
                         )
                     }

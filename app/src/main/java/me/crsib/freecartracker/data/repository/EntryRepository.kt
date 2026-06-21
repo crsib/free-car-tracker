@@ -25,6 +25,8 @@ class EntryRepository(
     suspend fun getFuel(id: Long): FuelEntry? = fuelDao.getById(id)
     suspend fun saveFuel(entry: FuelEntry): Long = fuelDao.upsert(entry)
     suspend fun deleteFuel(id: Long) = fuelDao.deleteById(id)
+    /** Most recent fuel entry by date, used to prefill the cost when adding a new one. */
+    suspend fun latestFuel(vehicleId: Long): FuelEntry? = fuelDao.latest(vehicleId)
 
     // Charge
     fun observeCharge(vehicleId: Long): Flow<List<ChargeEntry>> = chargeDao.observeForVehicle(vehicleId)
@@ -37,6 +39,14 @@ class EntryRepository(
     suspend fun getExpense(id: Long): Expense? = expenseDao.getById(id)
     suspend fun saveExpense(entry: Expense): Long = expenseDao.upsert(entry)
     suspend fun deleteExpense(id: Long) = expenseDao.deleteById(id)
+
+    /** Highest odometer reading recorded across fuel, charge and expense rows (canonical km). */
+    suspend fun lastOdometerKm(vehicleId: Long): Double? =
+        listOfNotNull(
+            fuelDao.maxOdometer(vehicleId),
+            chargeDao.maxOdometer(vehicleId),
+            expenseDao.maxOdometer(vehicleId),
+        ).maxOrNull()
 
     // Cost aggregation
     fun observeCostsSince(vehicleId: Long, sinceMillis: Long): Flow<List<CostView>> =
