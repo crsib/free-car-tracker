@@ -137,11 +137,4 @@ class BackupRepository(private val db: AppDatabase) {
         )
         appendLine(cells.joinToString(",") { csvEscape(it) })
     }
-
-    private fun csvEscape(value: String): String =
-        if (value.any { it == ',' || it == '"' || it == '\n' }) {
-            "\"" + value.replace("\"", "\"\"") + "\""
-        } else {
-            value
-        }
 }
