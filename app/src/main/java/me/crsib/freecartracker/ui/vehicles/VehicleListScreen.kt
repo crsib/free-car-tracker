@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MoreVert
@@ -45,12 +46,22 @@ import me.crsib.freecartracker.ui.util.label
 fun VehicleListScreen(
     onAddVehicle: () -> Unit,
     onEditVehicle: (Long) -> Unit,
+    onBack: () -> Unit,
 ) {
     val vm = containerViewModel { c -> VehicleListViewModel(c.vehicleRepository, c.preferences) }
     val state by vm.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Vehicles") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Vehicles") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onAddVehicle) {
                 Icon(Icons.Filled.Add, contentDescription = "Add vehicle")

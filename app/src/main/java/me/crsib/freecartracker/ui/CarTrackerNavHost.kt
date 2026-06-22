@@ -3,7 +3,6 @@ package me.crsib.freecartracker.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timeline
@@ -46,7 +45,6 @@ private enum class TopDestination(
     Dashboard("dashboard", "Dashboard", Icons.Filled.Speed),
     History("history", "History", Icons.AutoMirrored.Filled.List),
     Trips("trips", "Trips", Icons.Filled.Timeline),
-    Vehicles("vehicles", "Vehicles", Icons.Filled.DirectionsCar),
     Settings("settings", "Settings", Icons.Filled.Settings),
 }
 
@@ -63,6 +61,7 @@ object Routes {
         "$EDIT_ENTRY/$vehicleId/${kind.name}/$id"
 
     const val WEBDAV = "webdav"
+    const val VEHICLES = "vehicles"
     const val OBD_CONNECTION = "obd_connection"
     const val TELEMETRY_LIVE = "telemetry_live"
 
@@ -100,7 +99,7 @@ fun CarTrackerApp() {
                                 }
                             },
                             icon = { Icon(dest.icon, contentDescription = dest.label) },
-                            label = { Text(dest.label) },
+                            label = { Text(dest.label, maxLines = 1, softWrap = false) },
                         )
                     }
                 }
@@ -131,14 +130,18 @@ fun CarTrackerApp() {
                     onOpenConnection = { navController.navigate(Routes.OBD_CONNECTION) },
                 )
             }
-            composable(TopDestination.Vehicles.route) {
+            composable(Routes.VEHICLES) {
                 VehicleListScreen(
                     onAddVehicle = { navController.navigate(Routes.vehicleEdit(null)) },
                     onEditVehicle = { id -> navController.navigate(Routes.vehicleEdit(id)) },
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(TopDestination.Settings.route) {
-                SettingsScreen(onOpenWebDav = { navController.navigate(Routes.WEBDAV) })
+                SettingsScreen(
+                    onOpenWebDav = { navController.navigate(Routes.WEBDAV) },
+                    onOpenVehicles = { navController.navigate(Routes.VEHICLES) },
+                )
             }
             composable(Routes.WEBDAV) {
                 WebDavScreen(onBack = { navController.popBackStack() })

@@ -44,6 +44,7 @@ import me.crsib.freecartracker.ui.containerViewModel
 @Composable
 fun SettingsScreen(
     onOpenWebDav: () -> Unit,
+    onOpenVehicles: () -> Unit,
 ) {
     val vm = containerViewModel { c -> SettingsViewModel(c.preferences, c.backupRepository, c.vehicleSelection) }
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
@@ -108,6 +109,17 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Vehicles", style = MaterialTheme.typography.titleMedium)
+                    Text("Add, edit or archive your cars.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(
+                        onClick = onOpenVehicles,
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    ) { Text("Manage vehicles") }
+                }
+            }
+
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Theme", style = MaterialTheme.typography.titleMedium)

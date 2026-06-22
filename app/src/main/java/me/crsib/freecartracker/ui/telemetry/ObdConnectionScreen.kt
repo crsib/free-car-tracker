@@ -137,13 +137,19 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
 
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = vm::save, modifier = Modifier.weight(1f)) { Text("Save") }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = vm::save, modifier = Modifier.fillMaxWidth()) { Text("Save") }
                         OutlinedButton(
                             onClick = vm::testConnection,
                             enabled = !state.testing,
-                            modifier = Modifier.weight(1f),
-                        ) { Text(if (state.testing) "Testing…" else "Test connection") }
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                if (state.testing) "Testing…" else "Test connection",
+                                maxLines = 1,
+                                softWrap = false,
+                            )
+                        }
                     }
                     state.testResult?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
