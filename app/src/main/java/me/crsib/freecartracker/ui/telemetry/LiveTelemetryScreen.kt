@@ -256,7 +256,10 @@ private fun requiredPermissions(context: android.content.Context): Array<String>
     val config = (context.applicationContext as me.crsib.freecartracker.CarTrackerApp)
         .container.telemetrySettings.loadConnection()
     return buildList {
+        // COARSE must accompany FINE: on Android 12 a fine-only request is silently ignored
+        // (no permission dialog shown) unless COARSE is requested in the same call.
         add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
