@@ -23,6 +23,10 @@ interface VehicleDao {
     @Query("SELECT * FROM vehicles WHERE id = :id")
     suspend fun getById(id: Long): Vehicle?
 
+    /** Match a vehicle by its cross-device sync identity (for WebDAV upsert). */
+    @Query("SELECT * FROM vehicles WHERE syncId = :syncId")
+    suspend fun findBySyncId(syncId: String): Vehicle?
+
     @Query("SELECT * FROM vehicles ORDER BY id")
     suspend fun getAll(): List<Vehicle>
 

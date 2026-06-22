@@ -35,6 +35,9 @@ interface ExpenseDao {
     @Query("DELETE FROM expenses")
     suspend fun deleteAll()
 
+    @Query("DELETE FROM expenses WHERE vehicleId = :vehicleId")
+    suspend fun deleteForVehicle(vehicleId: Long)
+
     @Update
     suspend fun update(entry: Expense)
 

@@ -20,6 +20,17 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE id = :id")
     suspend fun getById(id: Long): Trip?
 
+    /** Match a trip by its cross-device sync identity (import de-dup). */
+    @Query("SELECT * FROM trips WHERE syncId = :syncId")
+    suspend fun findBySyncId(syncId: String): Trip?
+
+    /** Finished trips not yet uploaded — the incremental sync upload set. */
+    @Query("SELECT * FROM trips WHERE status = :status AND syncedAtMillis IS NULL ORDER BY startedAtMillis ASC")
+    suspend fun getUnsynced(status: TripStatus = TripStatus.COMPLETED): List<Trip>
+
+    @Query("UPDATE trips SET syncedAtMillis = :syncedAtMillis WHERE id = :id")
+    suspend fun markSynced(id: Long, syncedAtMillis: Long)
+
     /** Any trip still flagged as recording — used to recover after process death. */
     @Query("SELECT * FROM trips WHERE status = :status ORDER BY startedAtMillis DESC LIMIT 1")
     suspend fun latestWithStatus(status: TripStatus = TripStatus.RECORDING): Trip?

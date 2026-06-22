@@ -30,6 +30,9 @@ interface FuelEntryDao {
     @Query("SELECT * FROM fuel_entries WHERE vehicleId = :vehicleId ORDER BY dateMillis DESC, id DESC LIMIT 1")
     suspend fun latest(vehicleId: Long): FuelEntry?
 
+    @Query("SELECT * FROM fuel_entries WHERE vehicleId = :vehicleId ORDER BY dateMillis ASC, id ASC")
+    suspend fun getForVehicle(vehicleId: Long): List<FuelEntry>
+
     @Query("SELECT * FROM fuel_entries ORDER BY id")
     suspend fun getAll(): List<FuelEntry>
 
@@ -41,6 +44,9 @@ interface FuelEntryDao {
 
     @Query("DELETE FROM fuel_entries")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM fuel_entries WHERE vehicleId = :vehicleId")
+    suspend fun deleteForVehicle(vehicleId: Long)
 
     @Update
     suspend fun update(entry: FuelEntry)

@@ -38,6 +38,9 @@ interface ChargeEntryDao {
     @Query("DELETE FROM charge_entries")
     suspend fun deleteAll()
 
+    @Query("DELETE FROM charge_entries WHERE vehicleId = :vehicleId")
+    suspend fun deleteForVehicle(vehicleId: Long)
+
     @Update
     suspend fun update(entry: ChargeEntry)
 
