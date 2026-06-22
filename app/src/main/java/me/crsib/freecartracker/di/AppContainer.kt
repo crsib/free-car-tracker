@@ -10,12 +10,17 @@ import me.crsib.freecartracker.data.repository.VehicleRepository
 import me.crsib.freecartracker.data.webdav.WebDavBackupManager
 import me.crsib.freecartracker.data.webdav.WebDavClient
 import me.crsib.freecartracker.data.webdav.WebDavSettingsStore
+import me.crsib.freecartracker.telemetry.data.TelemetryRepository
+import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
+import me.crsib.freecartracker.telemetry.location.LocationSourceFactory
+import me.crsib.freecartracker.telemetry.obd.transport.TransportFactory
+import me.crsib.freecartracker.telemetry.service.TripRecorder
 
 /**
  * Manual dependency container (no Hilt — keeps build fast and APK small).
  * Holds app-scoped singletons.
  */
-class AppContainer(private val appContext: Context) {
+class AppContainer(val appContext: Context) {
 
     private val database: AppDatabase by lazy { AppDatabase.get(appContext) }
 
@@ -31,6 +36,31 @@ class AppContainer(private val appContext: Context) {
             chargeDao = database.chargeEntryDao(),
             expenseDao = database.expenseDao(),
             costDao = database.costDao(),
+        )
+    }
+
+    val telemetryRepository: TelemetryRepository by lazy {
+        TelemetryRepository(
+            tripDao = database.tripDao(),
+            gpsPointDao = database.gpsPointDao(),
+            obdSampleDao = database.obdSampleDao(),
+            extendedDao = database.obdExtendedSampleDao(),
+            dtcDao = database.dtcDao(),
+        )
+    }
+
+    val telemetrySettings: TelemetrySettingsStore by lazy { TelemetrySettingsStore(appContext) }
+
+    val transportFactory: TransportFactory by lazy { TransportFactory(appContext) }
+
+    val locationSourceFactory: LocationSourceFactory by lazy { LocationSourceFactory(appContext) }
+
+    val tripRecorder: TripRecorder by lazy {
+        TripRecorder(
+            telemetryRepo = telemetryRepository,
+            vehicleRepo = vehicleRepository,
+            transportFactory = transportFactory,
+            locationFactory = locationSourceFactory,
         )
     }
 

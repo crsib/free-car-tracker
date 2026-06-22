@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Car Tracker</string>
+
+    <!-- Telemetry recording -->
+    <string name="telemetry_channel_name">Trip recording</string>
+    <string name="telemetry_channel_desc">Ongoing notification while recording a trip</string>
+    <string name="telemetry_recording_title">Recording trip</string>
+    <string name="telemetry_recording_text">Collecting OBD &amp; GPS telemetry</string>
+    <string name="telemetry_stop">Stop</string>
 </resources>
