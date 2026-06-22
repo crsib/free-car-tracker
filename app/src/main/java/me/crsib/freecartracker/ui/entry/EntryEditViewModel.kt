@@ -21,13 +21,9 @@ import me.crsib.freecartracker.domain.model.ExpenseCategory
 import me.crsib.freecartracker.domain.model.FuelType
 import me.crsib.freecartracker.domain.model.Recurrence
 import java.math.BigDecimal
-import java.math.RoundingMode
 
 /** The three linked money fields on the fuel/charge forms; editing two derives the third. */
 enum class CostField { QUANTITY, PRICE, TOTAL }
-
-/** Recompute order, most-recently-edited first; the least-recent field is the one derived. */
-private val DEFAULT_COST_ORDER = listOf(CostField.QUANTITY, CostField.TOTAL, CostField.PRICE)
 
 data class EntryFormState(
     val loaded: Boolean = false,
@@ -43,8 +39,8 @@ data class EntryFormState(
     val totalCost: String = "",
     /** Price per quantity unit (per litre/gallon for fuel, per kWh for charge), in major currency. */
     val pricePerUnit: String = "",
-    /** Drives which of quantity/price/total is derived when the other two change. */
-    val costOrder: List<CostField> = DEFAULT_COST_ORDER,
+    /** Which linked field is currently derived (the output) on fuel/charge forms. */
+    val derivedField: CostField = CostField.PRICE,
     val note: String = "",
     // fuel
     val volume: String = "",
@@ -117,10 +113,25 @@ class EntryEditViewModel(
             loaded = true,
         )
 
-        // Adding a new fuel entry: prefill the cost with the last fill's cost as a convenience.
-        if (editId == null && kind == EntryKind.FUEL) {
-            entryRepo.latestFuel(vehicleId)?.let { last ->
-                s = s.copy(totalCost = money(last.totalCostMinor, vehicle.currency))
+        // Adding a new fuel/charge entry: prefill the price per unit from the last entry. The user
+        // then enters volume/energy (or total) and the linked fields derive the rest.
+        if (editId == null) {
+            val lastPrice = when (kind) {
+                EntryKind.FUEL -> entryRepo.latestFuel(vehicleId)?.let { last ->
+                    Money.pricePerUnit(
+                        last.totalCostMinor,
+                        UnitConversions.litresToDisplay(last.volumeL, system),
+                        vehicle.currency,
+                    )
+                }
+                EntryKind.CHARGE -> entryRepo.latestCharge(vehicleId)?.let { last ->
+                    Money.pricePerUnit(last.totalCostMinor, last.energyKwh, vehicle.currency)
+                }
+                else -> null
+            }
+            // With a prefilled price, the total is the field we derive as the user types the quantity.
+            if (lastPrice != null) {
+                s = s.copy(pricePerUnit = lastPrice.toPlainString(), derivedField = CostField.TOTAL)
             }
         }
 
@@ -170,63 +181,42 @@ class EntryEditViewModel(
         }
         // Show the derived price on fuel/charge forms (e.g. when editing an existing entry).
         if ((s.kind == EntryKind.FUEL || s.kind == EntryKind.CHARGE) && s.pricePerUnit.isBlank()) {
-            computeCostField(s, CostField.PRICE)?.let { s = s.copy(pricePerUnit = it) }
+            val digits = Money.fractionDigits(vehicle.currency)
+            val values = CostValues(quantity = quantityOf(s), price = "", total = s.totalCost)
+            CostLink.derive(CostField.PRICE, values, digits)?.let { s = s.copy(pricePerUnit = it) }
         }
         _state.value = s
     }
 
     fun update(transform: (EntryFormState) -> EntryFormState) = _state.update(transform)
 
-    /** Switch entry kind, resetting the per-kind cost linking (quantity field differs per kind). */
+    /** Switch entry kind, clearing the cost fields so values don't bleed across different kinds. */
     fun setKind(kind: EntryKind) = _state.update {
-        it.copy(kind = kind, pricePerUnit = "", costOrder = DEFAULT_COST_ORDER)
+        it.copy(kind = kind, pricePerUnit = "", totalCost = "", derivedField = CostField.PRICE)
     }
 
     /**
-     * Edit one of the three linked money fields. The edited field keeps the raw text the user
-     * typed; the least-recently-edited of the other two is recomputed from them (when both parse).
+     * Edit one of the three linked money fields. The edited field keeps the raw text the user typed;
+     * a dependent field is derived via [CostLink] (price stays anchored once set).
      */
     fun editCostField(field: CostField, raw: String) = _state.update { s ->
-        var ns = setCostRaw(s, field, raw)
-        if (s.kind != EntryKind.FUEL && s.kind != EntryKind.CHARGE) return@update ns
-        val order = listOf(field) + ns.costOrder.filter { it != field }
-        ns = ns.copy(costOrder = order)
-        val target = order.last()
-        computeCostField(ns, target)?.let { ns = setCostRaw(ns, target, it) }
-        ns
+        if (s.kind != EntryKind.FUEL && s.kind != EntryKind.CHARGE) {
+            return@update s.copy(totalCost = raw) // only TOTAL is editable on non-linked forms
+        }
+        val digits = s.vehicle?.let { Money.fractionDigits(it.currency) } ?: 2
+        val values = CostValues(quantity = quantityOf(s), price = s.pricePerUnit, total = s.totalCost)
+        val (next, derived) = CostLink.apply(values, s.derivedField, field, raw, digits)
+        s.copy(
+            volume = if (s.kind == EntryKind.CHARGE) s.volume else next.quantity,
+            energyKwh = if (s.kind == EntryKind.CHARGE) next.quantity else s.energyKwh,
+            pricePerUnit = next.price,
+            totalCost = next.total,
+            derivedField = derived,
+        )
     }
 
     private fun quantityOf(s: EntryFormState): String =
         if (s.kind == EntryKind.CHARGE) s.energyKwh else s.volume
-
-    private fun setCostRaw(s: EntryFormState, field: CostField, v: String): EntryFormState =
-        when (field) {
-            CostField.QUANTITY -> if (s.kind == EntryKind.CHARGE) s.copy(energyKwh = v) else s.copy(volume = v)
-            CostField.PRICE -> s.copy(pricePerUnit = v)
-            CostField.TOTAL -> s.copy(totalCost = v)
-        }
-
-    /** Derive [target] from the other two fields, or null if they aren't both usable. */
-    private fun computeCostField(s: EntryFormState, target: CostField): String? {
-        val digits = s.vehicle?.let { Money.fractionDigits(it.currency) } ?: 2
-        val qty = quantityOf(s).toBigDecimalOrNull()
-        val price = s.pricePerUnit.toBigDecimalOrNull()
-        val total = s.totalCost.toBigDecimalOrNull()
-        return when (target) {
-            CostField.TOTAL ->
-                if (price != null && qty != null && qty.signum() > 0)
-                    (price * qty).setScale(digits, RoundingMode.HALF_UP).toPlainString()
-                else null
-            CostField.PRICE ->
-                if (total != null && qty != null && qty.signum() > 0)
-                    total.divide(qty, digits + 1, RoundingMode.HALF_UP).toPlainString()
-                else null
-            CostField.QUANTITY ->
-                if (total != null && price != null && price.signum() > 0)
-                    total.divide(price, 3, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
-                else null
-        }
-    }
 
     fun save() = viewModelScope.launch {
         val s = _state.value

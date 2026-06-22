@@ -33,6 +33,8 @@ class EntryRepository(
     suspend fun getCharge(id: Long): ChargeEntry? = chargeDao.getById(id)
     suspend fun saveCharge(entry: ChargeEntry): Long = chargeDao.upsert(entry)
     suspend fun deleteCharge(id: Long) = chargeDao.deleteById(id)
+    /** Most recent charge entry by date, used to prefill the price when adding a new one. */
+    suspend fun latestCharge(vehicleId: Long): ChargeEntry? = chargeDao.latest(vehicleId)
 
     // Expense
     fun observeExpenses(vehicleId: Long): Flow<List<Expense>> = expenseDao.observeForVehicle(vehicleId)

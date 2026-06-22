@@ -23,6 +23,9 @@ interface ChargeEntryDao {
     @Query("SELECT MAX(odometerKm) FROM charge_entries WHERE vehicleId = :vehicleId")
     suspend fun maxOdometer(vehicleId: Long): Double?
 
+    @Query("SELECT * FROM charge_entries WHERE vehicleId = :vehicleId ORDER BY dateMillis DESC, id DESC LIMIT 1")
+    suspend fun latest(vehicleId: Long): ChargeEntry?
+
     @Query("SELECT * FROM charge_entries ORDER BY id")
     suspend fun getAll(): List<ChargeEntry>
 
