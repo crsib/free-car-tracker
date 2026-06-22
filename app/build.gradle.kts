@@ -32,6 +32,14 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // Make the exported Room schemas available to MigrationTestHelper as test assets.
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+        // Vendored OBD-II library (git submodule), compiled with our own Kotlin toolchain to
+        // avoid the JitPack binary's newer-Kotlin metadata + transitive stdlib upgrade.
+        getByName("main").java.srcDir("$rootDir/third_party/kotlin-obd-api/src/main/kotlin")
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -110,6 +118,21 @@ dependencies {
     implementation(libs.androidx.security.crypto)
     implementation(libs.okhttp)
 
+    // OBD-II / ELM327 parsing source is vendored via the third_party/kotlin-obd-api submodule
+    // and compiled in-tree (see sourceSets above). It needs coroutines, already present.
+
+    // Optional fused-location path. The app runs without Play Services present at runtime
+    // (head units with no GMS fall back to LocationManager).
+    implementation(libs.play.services.location)
+
+    // OpenStreetMap route map (no Google Play Services dependency).
+    implementation(libs.osmdroid.android)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

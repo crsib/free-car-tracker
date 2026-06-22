@@ -17,3 +17,6 @@ keystore.properties
 /app/build/
 .idea/
 .kotlin/
+
+# Stray ELM327/OBD debug capture log
+/elm.log
