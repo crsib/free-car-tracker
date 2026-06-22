@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only: permit cleartext HTTP so dev/instrumentation can talk to a local WebDAV
+  server (e.g. wsgidav at http://10.0.2.2:8080 reached from the emulator). Release builds
+  keep the platform default (cleartext blocked on API 28+).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

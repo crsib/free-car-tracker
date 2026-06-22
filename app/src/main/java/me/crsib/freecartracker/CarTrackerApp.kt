@@ -1,6 +1,9 @@
 package me.crsib.freecartracker
 
 import android.app.Application
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import me.crsib.freecartracker.data.webdav.WebDavBackupWorker
 import me.crsib.freecartracker.di.AppContainer
 import org.osmdroid.config.Configuration
@@ -36,9 +39,16 @@ class CarTrackerApp : Application() {
         }
         // Re-arm the daily WebDAV backup if the user has enabled it.
         runCatching {
-            if (container.webDavBackupManager.config().autoBackup) {
+            if (container.webDavSyncManager.config().autoBackup) {
                 WebDavBackupWorker.schedule(this)
             }
         }
+        // Sync when the app comes to the foreground, so a freshly-opened device pulls trips and
+        // ledger edits made elsewhere. No-ops unless WebDAV is configured (gated in SyncTrigger).
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                container.syncTrigger.requestSync()
+            }
+        })
     }
 }

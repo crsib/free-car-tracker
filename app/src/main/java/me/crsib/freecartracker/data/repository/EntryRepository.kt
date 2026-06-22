@@ -17,30 +17,32 @@ class EntryRepository(
     private val chargeDao: ChargeEntryDao,
     private val expenseDao: ExpenseDao,
     private val costDao: CostDao,
+    /** Invoked after any ledger mutation so the WebDAV sync can be triggered. */
+    private val onLedgerChanged: () -> Unit = {},
 ) {
     // Fuel
     fun observeFuel(vehicleId: Long): Flow<List<FuelEntry>> = fuelDao.observeForVehicle(vehicleId)
     fun observeFuelByOdometer(vehicleId: Long): Flow<List<FuelEntry>> =
         fuelDao.observeForVehicleByOdometer(vehicleId)
     suspend fun getFuel(id: Long): FuelEntry? = fuelDao.getById(id)
-    suspend fun saveFuel(entry: FuelEntry): Long = fuelDao.upsert(entry)
-    suspend fun deleteFuel(id: Long) = fuelDao.deleteById(id)
+    suspend fun saveFuel(entry: FuelEntry): Long = fuelDao.upsert(entry).also { onLedgerChanged() }
+    suspend fun deleteFuel(id: Long) = fuelDao.deleteById(id).also { onLedgerChanged() }
     /** Most recent fuel entry by date, used to prefill the cost when adding a new one. */
     suspend fun latestFuel(vehicleId: Long): FuelEntry? = fuelDao.latest(vehicleId)
 
     // Charge
     fun observeCharge(vehicleId: Long): Flow<List<ChargeEntry>> = chargeDao.observeForVehicle(vehicleId)
     suspend fun getCharge(id: Long): ChargeEntry? = chargeDao.getById(id)
-    suspend fun saveCharge(entry: ChargeEntry): Long = chargeDao.upsert(entry)
-    suspend fun deleteCharge(id: Long) = chargeDao.deleteById(id)
+    suspend fun saveCharge(entry: ChargeEntry): Long = chargeDao.upsert(entry).also { onLedgerChanged() }
+    suspend fun deleteCharge(id: Long) = chargeDao.deleteById(id).also { onLedgerChanged() }
     /** Most recent charge entry by date, used to prefill the price when adding a new one. */
     suspend fun latestCharge(vehicleId: Long): ChargeEntry? = chargeDao.latest(vehicleId)
 
     // Expense
     fun observeExpenses(vehicleId: Long): Flow<List<Expense>> = expenseDao.observeForVehicle(vehicleId)
     suspend fun getExpense(id: Long): Expense? = expenseDao.getById(id)
-    suspend fun saveExpense(entry: Expense): Long = expenseDao.upsert(entry)
-    suspend fun deleteExpense(id: Long) = expenseDao.deleteById(id)
+    suspend fun saveExpense(entry: Expense): Long = expenseDao.upsert(entry).also { onLedgerChanged() }
+    suspend fun deleteExpense(id: Long) = expenseDao.deleteById(id).also { onLedgerChanged() }
 
     /** Highest odometer reading recorded across fuel, charge and expense rows (canonical km). */
     suspend fun lastOdometerKm(vehicleId: Long): Double? =

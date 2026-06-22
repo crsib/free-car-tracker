@@ -7,9 +7,11 @@ import me.crsib.freecartracker.data.backup.BackupRepository
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.repository.EntryRepository
 import me.crsib.freecartracker.data.repository.VehicleRepository
-import me.crsib.freecartracker.data.webdav.WebDavBackupManager
+import me.crsib.freecartracker.data.webdav.SyncStateStore
+import me.crsib.freecartracker.data.webdav.SyncTrigger
 import me.crsib.freecartracker.data.webdav.WebDavClient
 import me.crsib.freecartracker.data.webdav.WebDavSettingsStore
+import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 import me.crsib.freecartracker.telemetry.data.TelemetryRepository
 import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
 import me.crsib.freecartracker.telemetry.companion.ObdCompanionManager
@@ -37,6 +39,7 @@ class AppContainer(val appContext: Context) {
             chargeDao = database.chargeEntryDao(),
             expenseDao = database.expenseDao(),
             costDao = database.costDao(),
+            onLedgerChanged = { syncTrigger.requestSync() },
         )
     }
 
@@ -64,6 +67,7 @@ class AppContainer(val appContext: Context) {
             vehicleRepo = vehicleRepository,
             transportFactory = transportFactory,
             locationFactory = locationSourceFactory,
+            onTripCompleted = { syncTrigger.requestSync() },
         )
     }
 
@@ -73,11 +77,24 @@ class AppContainer(val appContext: Context) {
 
     val backupRepository: BackupRepository by lazy { BackupRepository(database) }
 
-    val webDavBackupManager: WebDavBackupManager by lazy {
-        WebDavBackupManager(
-            store = WebDavSettingsStore(appContext),
+    private val webDavSettingsStore: WebDavSettingsStore by lazy { WebDavSettingsStore(appContext) }
+
+    private val syncStateStore: SyncStateStore by lazy { SyncStateStore(appContext) }
+
+    val webDavSyncManager: WebDavSyncManager by lazy {
+        WebDavSyncManager(
+            store = webDavSettingsStore,
+            syncState = syncStateStore,
             client = WebDavClient(),
-            backup = backupRepository,
+            db = database,
+            telemetryRepo = telemetryRepository,
         )
+    }
+
+    /** Debounced sync trigger fired on ledger edits and trip completion (and app open). */
+    val syncTrigger: SyncTrigger by lazy {
+        SyncTrigger(appContext) {
+            webDavSettingsStore.load().let { it.isConfigured && it.autoBackup }
+        }
     }
 }

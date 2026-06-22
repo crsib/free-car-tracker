@@ -42,7 +42,7 @@ import me.crsib.freecartracker.ui.util.formatDate
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WebDavScreen(onBack: () -> Unit) {
-    val vm = containerViewModel { c -> WebDavViewModel(c.webDavBackupManager) }
+    val vm = containerViewModel { c -> WebDavViewModel(c.webDavSyncManager) }
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }

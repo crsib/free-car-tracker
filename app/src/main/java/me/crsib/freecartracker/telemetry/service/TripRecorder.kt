@@ -52,6 +52,8 @@ class TripRecorder(
     private val transportFactory: TransportFactory,
     private val locationFactory: LocationSourceFactory,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Invoked after a trip is finalized as COMPLETED, so the WebDAV sync can upload it. */
+    private val onTripCompleted: () -> Unit = {},
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -368,6 +370,7 @@ class TripRecorder(
         tripId = null
         _liveState.value = LiveTelemetry()
         _recordingState.value = RecordingState.IDLE
+        if (status == TripStatus.COMPLETED) runCatching { onTripCompleted() }
     }
 
     private suspend fun resetBuffers() = bufferMutex.withLock {

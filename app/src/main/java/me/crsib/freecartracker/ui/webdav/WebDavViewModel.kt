@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.crsib.freecartracker.data.backup.RestoreMode
-import me.crsib.freecartracker.data.webdav.WebDavBackupManager
 import me.crsib.freecartracker.data.webdav.WebDavConfig
+import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 
 data class WebDavFormState(
     val url: String = "",
@@ -27,7 +27,7 @@ data class WebDavFormState(
 }
 
 class WebDavViewModel(
-    private val manager: WebDavBackupManager,
+    private val manager: WebDavSyncManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(WebDavFormState())
@@ -83,15 +83,16 @@ class WebDavViewModel(
         }
     }
 
+    @Suppress("UNUSED_PARAMETER") // mode is legacy; multi-device sync is bidirectional now
     fun restore(mode: RestoreMode) = viewModelScope.launch {
         _state.update { it.copy(busy = true) }
-        val result = manager.restoreNow(mode)
+        val result = manager.restoreNow()
         _state.update {
             it.copy(
                 busy = false,
                 message = result.fold(
-                    onSuccess = { msg -> msg },
-                    onFailure = { e -> "Restore failed: ${e.message}" },
+                    onSuccess = { msg -> "Synced. $msg" },
+                    onFailure = { e -> "Sync failed: ${e.message}" },
                 ),
             )
         }
