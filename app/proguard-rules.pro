@@ -16,3 +16,10 @@
 # Tink (via androidx.security-crypto) references optional ErrorProne annotations.
 -dontwarn com.google.errorprone.annotations.**
 -dontwarn javax.annotation.**
+
+# osmdroid (map) — keep its classes and silence optional/desktop-only deps it references.
+-keep class org.osmdroid.** { *; }
+-dontwarn org.osmdroid.**
+
+# Play Services location is an optional runtime dependency (absent on no-GMS head units).
+-dontwarn com.google.android.gms.**

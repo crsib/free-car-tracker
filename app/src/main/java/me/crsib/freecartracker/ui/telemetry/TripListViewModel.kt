@@ -1,0 +1,44 @@
+package me.crsib.freecartracker.ui.telemetry
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import me.crsib.freecartracker.data.VehicleSelection
+import me.crsib.freecartracker.data.entity.Vehicle
+import me.crsib.freecartracker.telemetry.data.TelemetryRepository
+import me.crsib.freecartracker.telemetry.data.entity.Trip
+
+data class TripListUiState(
+    val loading: Boolean = true,
+    val vehicle: Vehicle? = null,
+    val trips: List<Trip> = emptyList(),
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class TripListViewModel(
+    private val selection: VehicleSelection,
+    private val telemetryRepo: TelemetryRepository,
+) : ViewModel() {
+
+    val uiState: StateFlow<TripListUiState> =
+        selection.observeSelected()
+            .flatMapLatest { vehicle ->
+                if (vehicle == null) {
+                    flowOf(TripListUiState(loading = false))
+                } else {
+                    telemetryRepo.observeTrips(vehicle.id).map { trips ->
+                        TripListUiState(loading = false, vehicle = vehicle, trips = trips)
+                    }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TripListUiState())
+
+    fun deleteTrip(id: Long) = viewModelScope.launch { telemetryRepo.deleteTrip(id) }
+}

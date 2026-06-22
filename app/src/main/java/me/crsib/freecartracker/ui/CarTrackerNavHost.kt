@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -28,6 +29,11 @@ import me.crsib.freecartracker.ui.dashboard.DashboardScreen
 import me.crsib.freecartracker.ui.entry.AddEntryScreen
 import me.crsib.freecartracker.ui.history.HistoryScreen
 import me.crsib.freecartracker.ui.settings.SettingsScreen
+import me.crsib.freecartracker.ui.telemetry.LiveTelemetryScreen
+import me.crsib.freecartracker.ui.telemetry.ObdConnectionScreen
+import me.crsib.freecartracker.ui.telemetry.RouteMapScreen
+import me.crsib.freecartracker.ui.telemetry.TripDetailScreen
+import me.crsib.freecartracker.ui.telemetry.TripListScreen
 import me.crsib.freecartracker.ui.vehicles.VehicleEditScreen
 import me.crsib.freecartracker.ui.vehicles.VehicleListScreen
 import me.crsib.freecartracker.ui.webdav.WebDavScreen
@@ -39,6 +45,7 @@ private enum class TopDestination(
 ) {
     Dashboard("dashboard", "Dashboard", Icons.Filled.Speed),
     History("history", "History", Icons.AutoMirrored.Filled.List),
+    Trips("trips", "Trips", Icons.Filled.Timeline),
     Vehicles("vehicles", "Vehicles", Icons.Filled.DirectionsCar),
     Settings("settings", "Settings", Icons.Filled.Settings),
 }
@@ -56,6 +63,14 @@ object Routes {
         "$EDIT_ENTRY/$vehicleId/${kind.name}/$id"
 
     const val WEBDAV = "webdav"
+    const val OBD_CONNECTION = "obd_connection"
+    const val TELEMETRY_LIVE = "telemetry_live"
+
+    const val TRIP_DETAIL = "trip_detail"
+    fun tripDetail(id: Long): String = "$TRIP_DETAIL/$id"
+
+    const val ROUTE_MAP = "route_map"
+    fun routeMap(id: Long): String = "$ROUTE_MAP/$id"
 }
 
 @Composable
@@ -109,6 +124,13 @@ fun CarTrackerApp() {
                     onEditEntry = { vid, kind, id -> navController.navigate(Routes.editEntry(vid, kind, id)) },
                 )
             }
+            composable(TopDestination.Trips.route) {
+                TripListScreen(
+                    onRecord = { navController.navigate(Routes.TELEMETRY_LIVE) },
+                    onOpenTrip = { id -> navController.navigate(Routes.tripDetail(id)) },
+                    onOpenConnection = { navController.navigate(Routes.OBD_CONNECTION) },
+                )
+            }
             composable(TopDestination.Vehicles.route) {
                 VehicleListScreen(
                     onAddVehicle = { navController.navigate(Routes.vehicleEdit(null)) },
@@ -120,6 +142,33 @@ fun CarTrackerApp() {
             }
             composable(Routes.WEBDAV) {
                 WebDavScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.OBD_CONNECTION) {
+                ObdConnectionScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.TELEMETRY_LIVE) {
+                LiveTelemetryScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenConnection = { navController.navigate(Routes.OBD_CONNECTION) },
+                )
+            }
+            composable(
+                route = "${Routes.TRIP_DETAIL}/{tripId}",
+                arguments = listOf(navArgument("tripId") { type = NavType.LongType }),
+            ) { entry ->
+                val tripId = entry.arguments?.getLong("tripId") ?: return@composable
+                TripDetailScreen(
+                    tripId = tripId,
+                    onBack = { navController.popBackStack() },
+                    onOpenMap = { id -> navController.navigate(Routes.routeMap(id)) },
+                )
+            }
+            composable(
+                route = "${Routes.ROUTE_MAP}/{tripId}",
+                arguments = listOf(navArgument("tripId") { type = NavType.LongType }),
+            ) { entry ->
+                val tripId = entry.arguments?.getLong("tripId") ?: return@composable
+                RouteMapScreen(tripId = tripId, onBack = { navController.popBackStack() })
             }
 
             composable(

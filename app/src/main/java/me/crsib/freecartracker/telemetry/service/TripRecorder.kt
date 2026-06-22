@@ -1,0 +1,381 @@
+package me.crsib.freecartracker.telemetry.service
+
+import me.crsib.freecartracker.data.repository.VehicleRepository
+import me.crsib.freecartracker.domain.model.ObdTransportKind
+import me.crsib.freecartracker.domain.model.TripStatus
+import me.crsib.freecartracker.telemetry.DerivedMetrics
+import me.crsib.freecartracker.telemetry.TripAggregator
+import me.crsib.freecartracker.telemetry.data.TelemetryRepository
+import me.crsib.freecartracker.telemetry.data.TripAggregates
+import me.crsib.freecartracker.telemetry.data.entity.GpsPoint
+import me.crsib.freecartracker.telemetry.data.entity.ObdExtendedSample
+import me.crsib.freecartracker.telemetry.data.entity.ObdSample
+import me.crsib.freecartracker.telemetry.data.entity.Trip
+import me.crsib.freecartracker.telemetry.location.LocationFix
+import me.crsib.freecartracker.telemetry.location.LocationSource
+import me.crsib.freecartracker.telemetry.location.LocationSourceFactory
+import me.crsib.freecartracker.telemetry.obd.AdaptivePoller
+import me.crsib.freecartracker.telemetry.obd.AdaptivePollSchedule
+import me.crsib.freecartracker.telemetry.obd.ObdReading
+import me.crsib.freecartracker.telemetry.obd.ObdSession
+import me.crsib.freecartracker.telemetry.obd.pid.PidProfileRegistry
+import me.crsib.freecartracker.telemetry.obd.pid.Storage
+import me.crsib.freecartracker.telemetry.obd.transport.ObdConnectionConfig
+import me.crsib.freecartracker.telemetry.obd.transport.ObdTransport
+import me.crsib.freecartracker.telemetry.obd.transport.TransportFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
+
+/**
+ * App-scoped singleton that owns one recording session: connects OBD, subscribes to GPS,
+ * batches samples to the database, and exposes live state to the UI. The foreground
+ * [TelemetryService] only keeps the process alive; all work happens here.
+ */
+class TripRecorder(
+    private val telemetryRepo: TelemetryRepository,
+    private val vehicleRepo: VehicleRepository,
+    private val transportFactory: TransportFactory,
+    private val locationFactory: LocationSourceFactory,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Serializes session lifecycle transitions (start/stop/recover) so they can't interleave. */
+    private val lifecycleMutex = Mutex()
+
+    private val _recordingState = MutableStateFlow(RecordingState.IDLE)
+    val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
+
+    private val _liveState = MutableStateFlow(LiveTelemetry())
+    val liveState: StateFlow<LiveTelemetry> = _liveState.asStateFlow()
+
+    private var sessionJob: kotlinx.coroutines.Job? = null
+    @Volatile private var tripId: Long? = null
+    @Volatile private var startedAt: Long = 0
+    @Volatile private var requestedStatus: TripStatus = TripStatus.ABORTED
+    @Volatile private var lastFix: LocationFix? = null
+
+    private val bufferMutex = Mutex()
+    private val obdBuffer = mutableListOf<ObdSample>()
+    private val gpsBuffer = mutableListOf<GpsPoint>()
+    private val extBuffer = mutableListOf<ObdExtendedSample>()
+
+    val isRecording: Boolean
+        get() = _recordingState.value != RecordingState.IDLE
+
+    fun start(vehicleId: Long, config: ObdConnectionConfig) {
+        scope.launch {
+            lifecycleMutex.withLock {
+                // A genuinely-running session ignores a duplicate start. A session that stop()
+                // already cancelled has isActive == false here, so we fall through and join it —
+                // letting its NonCancellable finalize() complete before the new session begins,
+                // so the old finalize can't clobber the new session's state.
+                val current = sessionJob
+                if (current != null && current.isActive) return@withLock
+                current?.join()
+                requestedStatus = TripStatus.ABORTED
+                _recordingState.value = RecordingState.CONNECTING
+                sessionJob = scope.launch { runRecording(vehicleId, config) }
+            }
+        }
+    }
+
+    fun stop() {
+        scope.launch {
+            lifecycleMutex.withLock {
+                requestedStatus = TripStatus.COMPLETED
+                sessionJob?.cancel()
+            }
+        }
+    }
+
+    private suspend fun runRecording(vehicleId: Long, config: ObdConnectionConfig) {
+        val vehicle = vehicleRepo.getById(vehicleId)
+        if (vehicle == null) {
+            _recordingState.value = RecordingState.IDLE
+            return
+        }
+        startedAt = clock()
+        lastFix = null
+        resetBuffers()
+        val id = telemetryRepo.startTrip(
+            Trip(
+                vehicleId = vehicleId,
+                startedAtMillis = startedAt,
+                status = TripStatus.RECORDING,
+                transport = config.kind,
+                profileKey = PidProfileRegistry.select(vehicle).key,
+            ),
+        )
+        tripId = id
+        _liveState.value = LiveTelemetry(transport = config.kind)
+
+        try {
+            coroutineScope {
+                launch { collectGps() }
+                if (config.kind != ObdTransportKind.NONE) {
+                    launch { collectObd(vehicleId, config) }
+                } else {
+                    _recordingState.value = RecordingState.RECORDING
+                }
+                launch { flushLoop() }
+                launch { elapsedLoop() }
+            }
+        } finally {
+            withContext(NonCancellable) { finalize(requestedStatus) }
+        }
+    }
+
+    private suspend fun collectObd(vehicleId: Long, config: ObdConnectionConfig) {
+        val vehicle = vehicleRepo.getById(vehicleId) ?: return
+        val profile = PidProfileRegistry.select(vehicle)
+        var backoffMs = INITIAL_BACKOFF_MS
+        while (coroutineContext.isActive) {
+            var transport: ObdTransport? = null
+            try {
+                _recordingState.value = RecordingState.CONNECTING
+                transport = transportFactory.create(config)
+                transport.connect()
+                val session = ObdSession(transport)
+                session.initialize()
+                val supported = runCatching { session.discoverSupportedPids() }.getOrDefault(emptySet())
+                val defs = profile.pids.filter { def ->
+                    // Keep non-Mode-01 (manufacturer) PIDs; filter Mode 01 by discovery when available.
+                    def.command.mode != "01" || supported.isEmpty() ||
+                        def.command.pid.uppercase() in supported
+                }
+                val poller = AdaptivePoller(session, AdaptivePollSchedule.from(defs))
+                _recordingState.value = RecordingState.RECORDING
+                _liveState.update { it.copy(obdConnected = true) }
+                backoffMs = INITIAL_BACKOFF_MS
+                poller.readings().collect { readings -> onObdReadings(readings) }
+            } catch (c: CancellationException) {
+                runCatching { transport?.close() }
+                throw c
+            } catch (_: Exception) {
+                _recordingState.value = RecordingState.RECONNECTING
+                _liveState.update { it.copy(obdConnected = false) }
+                runCatching { transport?.close() }
+                delay(backoffMs)
+                backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+            }
+        }
+    }
+
+    private suspend fun collectGps() {
+        try {
+            collectGpsInternal()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+            // Location unavailable or permission not granted: record OBD-only, don't fail the trip.
+        }
+    }
+
+    private suspend fun collectGpsInternal() {
+        val source: LocationSource = locationFactory.create()
+        if (!source.isAvailable()) return
+        source.locations(GPS_INTERVAL_MS).collect { fix ->
+            val id = tripId ?: return@collect
+            bufferMutex.withLock {
+                gpsBuffer += GpsPoint(
+                    tripId = id,
+                    timestampMillis = fix.timestampMillis,
+                    latitude = fix.latitude,
+                    longitude = fix.longitude,
+                    altitudeM = fix.altitudeM,
+                    speedKmh = fix.speedKmh,
+                    bearingDeg = fix.bearingDeg,
+                    accuracyM = fix.accuracyM,
+                    provider = fix.provider,
+                )
+            }
+            val prev = lastFix
+            val added = if (prev != null) {
+                DerivedMetrics.haversineKm(prev.latitude, prev.longitude, fix.latitude, fix.longitude)
+            } else {
+                0.0
+            }
+            lastFix = fix
+            _liveState.update {
+                it.copy(
+                    latitude = fix.latitude,
+                    longitude = fix.longitude,
+                    gpsSpeedKmh = fix.speedKmh,
+                    gpsFix = true,
+                    distanceKm = it.distanceKm + added,
+                )
+            }
+        }
+    }
+
+    private suspend fun onObdReadings(readings: List<ObdReading>) {
+        if (readings.isEmpty()) return
+        val id = tripId ?: return
+        val ts = clock()
+        val wide = readings.filter { it.storage is Storage.Wide }.associate { it.key to it.value }
+        val extended = readings.filter { it.storage is Storage.Extended }
+        val sample = buildObdSample(id, ts, wide)
+        bufferMutex.withLock {
+            obdBuffer += sample
+            extended.forEach {
+                extBuffer += ObdExtendedSample(
+                    tripId = id,
+                    timestampMillis = ts,
+                    metricKey = it.key,
+                    value = it.value,
+                    unit = it.unit,
+                )
+            }
+        }
+        _liveState.update { state ->
+            state.copy(
+                speedKmh = wide["speedKmh"] ?: state.speedKmh,
+                rpm = wide["rpm"] ?: state.rpm,
+                throttlePct = wide["throttlePct"] ?: state.throttlePct,
+                engineLoadPct = wide["engineLoadPct"] ?: state.engineLoadPct,
+                coolantTempC = wide["coolantTempC"] ?: state.coolantTempC,
+                controlModuleVoltage = wide["controlModuleVoltage"] ?: state.controlModuleVoltage,
+                fuelLevelPct = wide["fuelLevelPct"] ?: state.fuelLevelPct,
+                hybridBatteryLifePct = wide["hybridBatteryLifePct"] ?: state.hybridBatteryLifePct,
+                obdConnected = true,
+                extended = if (extended.isEmpty()) {
+                    state.extended
+                } else {
+                    state.extended + extended.associate { it.key to it.value }
+                },
+            )
+        }
+    }
+
+    private fun buildObdSample(tripId: Long, ts: Long, m: Map<String, Double>): ObdSample {
+        val l100 = DerivedMetrics.l100(m["fuelRateLph"], m["mafGramsPerSec"], m["speedKmh"])
+        return ObdSample(
+            tripId = tripId,
+            timestampMillis = ts,
+            speedKmh = m["speedKmh"],
+            rpm = m["rpm"],
+            throttlePct = m["throttlePct"],
+            engineLoadPct = m["engineLoadPct"],
+            runTimeSec = m["runTimeSec"]?.toInt(),
+            coolantTempC = m["coolantTempC"],
+            intakeAirTempC = m["intakeAirTempC"],
+            ambientAirTempC = m["ambientAirTempC"],
+            mafGramsPerSec = m["mafGramsPerSec"],
+            manifoldPressureKpa = m["manifoldPressureKpa"],
+            controlModuleVoltage = m["controlModuleVoltage"],
+            fuelLevelPct = m["fuelLevelPct"],
+            fuelRateLph = m["fuelRateLph"],
+            derivedL100 = l100,
+            derivedCo2Gkm = DerivedMetrics.co2GkmFromL100(l100),
+            hybridBatteryLifePct = m["hybridBatteryLifePct"],
+        )
+    }
+
+    private suspend fun flushLoop() {
+        while (coroutineContext.isActive) {
+            delay(FLUSH_INTERVAL_MS)
+            flushBuffers()
+        }
+    }
+
+    private suspend fun elapsedLoop() {
+        while (coroutineContext.isActive) {
+            _liveState.update { it.copy(elapsedSec = (clock() - startedAt) / 1000) }
+            delay(1000)
+        }
+    }
+
+    private suspend fun flushBuffers() {
+        val obd: List<ObdSample>
+        val gps: List<GpsPoint>
+        val ext: List<ObdExtendedSample>
+        bufferMutex.withLock {
+            obd = obdBuffer.toList(); obdBuffer.clear()
+            gps = gpsBuffer.toList(); gpsBuffer.clear()
+            ext = extBuffer.toList(); extBuffer.clear()
+        }
+        if (obd.isNotEmpty()) telemetryRepo.appendObd(obd)
+        if (gps.isNotEmpty()) telemetryRepo.appendGps(gps)
+        if (ext.isNotEmpty()) telemetryRepo.appendExtended(ext)
+    }
+
+    private suspend fun finalize(status: TripStatus) {
+        val id = tripId
+        if (id == null) {
+            _recordingState.value = RecordingState.IDLE
+            return
+        }
+        flushBuffers()
+        val ended = clock()
+        val data = telemetryRepo.getTripData(id)
+        val agg = if (data != null) {
+            TripAggregator.aggregate(startedAt, ended, data.gpsPoints, data.obdSamples)
+        } else {
+            EMPTY_AGGREGATES
+        }
+        telemetryRepo.finalizeTrip(id, status, ended, agg)
+        tripId = null
+        _liveState.value = LiveTelemetry()
+        _recordingState.value = RecordingState.IDLE
+    }
+
+    private suspend fun resetBuffers() = bufferMutex.withLock {
+        obdBuffer.clear(); gpsBuffer.clear(); extBuffer.clear()
+    }
+
+    /**
+     * Finalize any trip left in RECORDING from a previous process death. Safe to call on app
+     * start; does nothing if a recording is currently active.
+     */
+    fun recoverIncompleteTrips() {
+        scope.launch {
+            // Guard the whole recovery: a DB failure here must not crash app startup.
+            runCatching {
+                lifecycleMutex.withLock {
+                    // Don't touch a session that's starting/running concurrently (e.g. app launched
+                    // straight into recording); its RECORDING row is not an orphan.
+                    if (sessionJob?.isActive == true) return@withLock
+                    val orphan = telemetryRepo.recoverableTrip() ?: return@withLock
+                    val data = telemetryRepo.getTripData(orphan.id)
+                    val ended = data?.gpsPoints?.lastOrNull()?.timestampMillis
+                        ?: data?.obdSamples?.lastOrNull()?.timestampMillis
+                        ?: orphan.startedAtMillis
+                    val agg = if (data != null) {
+                        TripAggregator.aggregate(orphan.startedAtMillis, ended, data.gpsPoints, data.obdSamples)
+                    } else {
+                        EMPTY_AGGREGATES
+                    }
+                    telemetryRepo.finalizeTrip(orphan.id, TripStatus.ABORTED, ended, agg)
+                }
+            }
+        }
+    }
+
+    private companion object {
+        const val GPS_INTERVAL_MS = 1000L
+        const val FLUSH_INTERVAL_MS = 2000L
+        const val INITIAL_BACKOFF_MS = 1000L
+        const val MAX_BACKOFF_MS = 15_000L
+        val EMPTY_AGGREGATES = TripAggregates(
+            distanceKm = null, durationSec = null, avgSpeedKmh = null, maxSpeedKmh = null,
+            movingSec = null, fuelUsedL = null, energyUsedKwh = null, avgConsumptionL100 = null,
+            obdSampleCount = 0, gpsPointCount = 0,
+        )
+    }
+}

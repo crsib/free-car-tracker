@@ -1,0 +1,3 @@
+[submodule "third_party/kotlin-obd-api"]
+	path = third_party/kotlin-obd-api
+	url = https://github.com/eltonvs/kotlin-obd-api.git
