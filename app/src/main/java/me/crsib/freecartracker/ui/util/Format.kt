@@ -34,6 +34,16 @@ fun windowLabel(days: Int): String = if (days <= 0) "All time" else "${days}d"
 /** Longer label for a window length used in menus, e.g. "Last 30 days" or "All time". */
 fun windowMenuLabel(days: Int): String = if (days <= 0) "All time" else "Last $days days"
 
+/** Format a duration in seconds as H:MM:SS (or M:SS under an hour). */
+fun formatDuration(totalSeconds: Long): String {
+    val s = totalSeconds.coerceAtLeast(0)
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) String.format(Locale.getDefault(), "%d:%02d:%02d", h, m, sec)
+    else String.format(Locale.getDefault(), "%d:%02d", m, sec)
+}
+
 /** Format a number with up to [decimals] fraction digits, trimming trailing zeros. */
 fun formatNumber(value: Double, decimals: Int = 1): String {
     val nf = NumberFormat.getNumberInstance(Locale.getDefault()).apply {
