@@ -14,6 +14,14 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import me.crsib.freecartracker.CarTrackerApp
 import me.crsib.freecartracker.MainActivity
 import me.crsib.freecartracker.R
@@ -26,11 +34,19 @@ class TelemetryService : Service() {
 
     private val container get() = (application as CarTrackerApp).container
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var selfStopJob: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
+    }
+
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -60,8 +76,26 @@ class TelemetryService : Service() {
                     return START_NOT_STICKY
                 }
                 container.tripRecorder.start(vehicleId, container.telemetrySettings.loadConnection())
+                observeForSelfStop()
                 return START_STICKY
             }
+        }
+    }
+
+    /**
+     * Stops the service when the recorder returns to IDLE on its own — i.e. the auto-end watchdog
+     * finalized the trip. Waits for recording to actually begin first, so the initial IDLE before
+     * CONNECTING doesn't trip it. A manual Stop goes through ACTION_STOP and tears down directly;
+     * this collector just falls away with the cancelled scope.
+     */
+    private fun observeForSelfStop() {
+        selfStopJob?.cancel()
+        selfStopJob = serviceScope.launch {
+            container.tripRecorder.recordingState
+                .dropWhile { it == RecordingState.IDLE }
+                .first { it == RecordingState.IDLE }
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 

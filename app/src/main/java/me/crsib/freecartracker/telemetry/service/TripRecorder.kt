@@ -70,6 +70,12 @@ class TripRecorder(
     @Volatile private var requestedStatus: TripStatus = TripStatus.ABORTED
     @Volatile private var lastFix: LocationFix? = null
 
+    /** When the OBD link first dropped (null while connected); drives auto-end. */
+    @Volatile private var obdLostSince: Long? = null
+
+    /** Set when CompanionDeviceManager reports the adapter left BT range — shortens auto-end grace. */
+    @Volatile private var presenceLost: Boolean = false
+
     private val bufferMutex = Mutex()
     private val obdBuffer = mutableListOf<ObdSample>()
     private val gpsBuffer = mutableListOf<GpsPoint>()
@@ -104,6 +110,12 @@ class TripRecorder(
         }
     }
 
+    /** CompanionDeviceManager hint that the adapter left BT range — auto-end sooner if OBD is down. */
+    fun onAdapterPresenceLost() { presenceLost = true }
+
+    /** Adapter is back in range; cancel the shortened auto-end grace. */
+    fun onAdapterPresenceGained() { presenceLost = false }
+
     private suspend fun runRecording(vehicleId: Long, config: ObdConnectionConfig) {
         val vehicle = vehicleRepo.getById(vehicleId)
         if (vehicle == null) {
@@ -112,6 +124,8 @@ class TripRecorder(
         }
         startedAt = clock()
         lastFix = null
+        obdLostSince = null
+        presenceLost = false
         resetBuffers()
         val id = telemetryRepo.startTrip(
             Trip(
@@ -130,6 +144,7 @@ class TripRecorder(
                 launch { collectGps() }
                 if (config.kind != ObdTransportKind.NONE) {
                     launch { collectObd(vehicleId, config) }
+                    launch { autoEndWatchdog() }
                 } else {
                     _recordingState.value = RecordingState.RECORDING
                 }
@@ -162,6 +177,7 @@ class TripRecorder(
                 val poller = AdaptivePoller(session, AdaptivePollSchedule.from(defs))
                 _recordingState.value = RecordingState.RECORDING
                 _liveState.update { it.copy(obdConnected = true) }
+                obdLostSince = null
                 backoffMs = INITIAL_BACKOFF_MS
                 poller.readings().collect { readings -> onObdReadings(readings) }
             } catch (c: CancellationException) {
@@ -170,9 +186,28 @@ class TripRecorder(
             } catch (_: Exception) {
                 _recordingState.value = RecordingState.RECONNECTING
                 _liveState.update { it.copy(obdConnected = false) }
+                if (obdLostSince == null) obdLostSince = clock()
                 runCatching { transport?.close() }
                 delay(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+            }
+        }
+    }
+
+    /**
+     * Ends the trip automatically once the OBD link has been down long enough to mean the drive is
+     * over (adapter lost power on engine-off, or you walked out of range) rather than a momentary
+     * dropout. A CompanionDeviceManager "device left range" hint ([presenceLost]) shortens the
+     * grace. Finalizes as COMPLETED via the same path as a manual Stop.
+     */
+    private suspend fun autoEndWatchdog() {
+        while (coroutineContext.isActive) {
+            delay(AUTO_END_CHECK_MS)
+            val since = obdLostSince ?: continue
+            val grace = if (presenceLost) AUTO_END_GRACE_AFTER_DISAPPEAR_MS else AUTO_END_GRACE_MS
+            if (clock() - since >= grace) {
+                stop()
+                return
             }
         }
     }
@@ -372,6 +407,11 @@ class TripRecorder(
         const val FLUSH_INTERVAL_MS = 2000L
         const val INITIAL_BACKOFF_MS = 1000L
         const val MAX_BACKOFF_MS = 15_000L
+
+        /** Auto-end watchdog cadence and grace periods (sustained OBD loss → finalize the trip). */
+        const val AUTO_END_CHECK_MS = 15_000L
+        const val AUTO_END_GRACE_MS = 180_000L
+        const val AUTO_END_GRACE_AFTER_DISAPPEAR_MS = 30_000L
         val EMPTY_AGGREGATES = TripAggregates(
             distanceKm = null, durationSec = null, avgSpeedKmh = null, maxSpeedKmh = null,
             movingSec = null, fuelUsedL = null, energyUsedKwh = null, avgConsumptionL100 = null,

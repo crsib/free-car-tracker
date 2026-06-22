@@ -12,6 +12,7 @@ import me.crsib.freecartracker.data.webdav.WebDavClient
 import me.crsib.freecartracker.data.webdav.WebDavSettingsStore
 import me.crsib.freecartracker.telemetry.data.TelemetryRepository
 import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
+import me.crsib.freecartracker.telemetry.companion.ObdCompanionManager
 import me.crsib.freecartracker.telemetry.location.LocationSourceFactory
 import me.crsib.freecartracker.telemetry.obd.transport.TransportFactory
 import me.crsib.freecartracker.telemetry.service.TripRecorder
@@ -52,6 +53,8 @@ class AppContainer(val appContext: Context) {
     val telemetrySettings: TelemetrySettingsStore by lazy { TelemetrySettingsStore(appContext) }
 
     val transportFactory: TransportFactory by lazy { TransportFactory(appContext) }
+
+    val obdCompanionManager: ObdCompanionManager by lazy { ObdCompanionManager(appContext) }
 
     val locationSourceFactory: LocationSourceFactory by lazy { LocationSourceFactory(appContext) }
 

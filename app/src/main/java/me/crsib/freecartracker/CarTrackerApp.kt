@@ -24,6 +24,16 @@ class CarTrackerApp : Application() {
         // Finalize any trip left mid-recording by a previous process death. This only launches
         // a coroutine (whose body guards itself), so a runCatching here would catch nothing.
         container.tripRecorder.recoverIncompleteTrips()
+        // Re-arm companion presence observation so a paired adapter can cold-start recording even
+        // after a reboot. Cheap and idempotent; only does anything when the user opted in.
+        runCatching {
+            val settings = container.telemetrySettings
+            if (settings.autoStartEnabled) {
+                settings.loadConnection().deviceAddress?.let {
+                    container.obdCompanionManager.startObserving(it)
+                }
+            }
+        }
         // Re-arm the daily WebDAV backup if the user has enabled it.
         runCatching {
             if (container.webDavBackupManager.config().autoBackup) {

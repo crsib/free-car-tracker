@@ -22,7 +22,13 @@ class TelemetrySettingsStore(context: Context) {
             .apply()
     }
 
+    /** Whether recording should auto-start when the paired (BT-Classic) adapter comes into range. */
+    var autoStartEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_START, false)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
+
     private companion object {
         const val KEY_CONNECTION = "obd_connection"
+        const val KEY_AUTO_START = "auto_start_recording"
     }
 }

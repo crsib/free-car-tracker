@@ -10,6 +10,12 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- Auto-start recording when the paired adapter comes into range (CompanionDeviceManager).
+         All are normal/install-time permissions granted without a runtime prompt. -->
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+
     <!-- GPS track recording -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -50,6 +56,16 @@
             android:name=".telemetry.service.TelemetryService"
             android:exported="false"
             android:foregroundServiceType="location|connectedDevice" />
+
+        <!-- Woken by the OS when the associated ELM327 adapter comes into range. -->
+        <service
+            android:name=".telemetry.companion.ObdCompanionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

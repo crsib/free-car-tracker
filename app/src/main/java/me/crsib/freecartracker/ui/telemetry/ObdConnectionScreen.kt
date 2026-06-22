@@ -1,8 +1,11 @@
 package me.crsib.freecartracker.ui.telemetry
 
 import android.Manifest
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
+import androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,9 +28,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,13 +49,31 @@ import me.crsib.freecartracker.ui.containerViewModel
 @Composable
 fun ObdConnectionScreen(onBack: () -> Unit) {
     val vm = containerViewModel { c ->
-        ObdConnectionViewModel(c.appContext, c.telemetrySettings, c.transportFactory, c.locationSourceFactory)
+        ObdConnectionViewModel(
+            c.appContext,
+            c.telemetrySettings,
+            c.transportFactory,
+            c.locationSourceFactory,
+            c.obdCompanionManager,
+        )
     }
     val state by vm.state.collectAsStateWithLifecycle()
     val config = state.config
 
     val btPermissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) { grants ->
         if (grants[Manifest.permission.BLUETOOTH_CONNECT] == true) vm.refreshBondedDevices()
+    }
+
+    // CompanionDeviceManager hands back an IntentSender; the system dialog must be launched from
+    // here (an Activity). On confirmation the manager's callback finalizes the toggle.
+    val associationLauncher = rememberLauncherForActivityResult(StartIntentSenderForResult()) { result ->
+        if (result.resultCode != Activity.RESULT_OK) vm.onAssociationCancelled()
+    }
+    LaunchedEffect(state.pendingAssociation) {
+        state.pendingAssociation?.let { sender ->
+            vm.consumePendingAssociation()
+            associationLauncher.launch(IntentSenderRequest.Builder(sender).build())
+        }
     }
 
     Scaffold(
@@ -106,6 +129,10 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
 
             if (config.kind == ObdTransportKind.BLE) {
                 BleAdvancedCard(config.bleServiceUuid, config.bleNotifyUuid, config.bleWriteUuid, vm)
+            }
+
+            if (config.kind == ObdTransportKind.BT_CLASSIC) {
+                AutoStartCard(state = state, onToggle = vm::setAutoStart)
             }
 
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -198,6 +225,41 @@ private fun BluetoothCard(
             }
             if (state.bonded.isEmpty()) {
                 Text("No paired devices loaded.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutoStartCard(state: ObdConnUiState, onToggle: (Boolean) -> Unit) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Auto-start recording", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Start a trip automatically when this adapter connects — even if the app is closed.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = state.autoStartEnabled,
+                    onCheckedChange = onToggle,
+                    enabled = state.config.deviceAddress != null,
+                )
+            }
+            if (state.config.deviceAddress == null) {
+                Text(
+                    "Pick a paired adapter above first.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            state.autoStartError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
     }

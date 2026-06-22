@@ -3,6 +3,7 @@ package me.crsib.freecartracker.ui.telemetry
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.IntentSender
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.crsib.freecartracker.domain.model.ObdTransportKind
+import me.crsib.freecartracker.telemetry.companion.ObdCompanionManager
 import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
 import me.crsib.freecartracker.telemetry.location.LocationSourceFactory
 import me.crsib.freecartracker.telemetry.obd.ObdSession
@@ -29,6 +31,10 @@ data class ObdConnUiState(
     val testing: Boolean = false,
     val testResult: String? = null,
     val savedAt: Long = 0,
+    val autoStartEnabled: Boolean = false,
+    /** One-shot: a system association dialog the screen must launch from an Activity. */
+    val pendingAssociation: IntentSender? = null,
+    val autoStartError: String? = null,
 )
 
 class ObdConnectionViewModel(
@@ -36,9 +42,15 @@ class ObdConnectionViewModel(
     private val settings: TelemetrySettingsStore,
     private val transportFactory: TransportFactory,
     private val locationFactory: LocationSourceFactory,
+    private val companion: ObdCompanionManager,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ObdConnUiState(config = settings.loadConnection()))
+    private val _state = MutableStateFlow(
+        ObdConnUiState(
+            config = settings.loadConnection(),
+            autoStartEnabled = settings.autoStartEnabled,
+        ),
+    )
     val state: StateFlow<ObdConnUiState> = _state.asStateFlow()
 
     private fun updateConfig(block: (ObdConnectionConfig) -> ObdConnectionConfig) =
@@ -57,6 +69,61 @@ class ObdConnectionViewModel(
         settings.saveConnection(_state.value.config)
         _state.update { it.copy(savedAt = System.currentTimeMillis()) }
     }
+
+    /**
+     * Toggle auto-start recording. Enabling requires a saved BT-Classic adapter and, the first
+     * time, runs the CompanionDeviceManager association dialog (a one-time system consent). Once
+     * associated, the OS wakes the app and starts recording whenever the adapter comes into range.
+     */
+    fun setAutoStart(enabled: Boolean) = if (enabled) enableAutoStart() else disableAutoStart()
+
+    private fun enableAutoStart() {
+        val config = _state.value.config
+        val address = config.deviceAddress
+        if (config.kind != ObdTransportKind.BT_CLASSIC || address.isNullOrBlank()) {
+            _state.update { it.copy(autoStartError = "Pick a paired Bluetooth adapter first.") }
+            return
+        }
+        if (!companion.isAvailable()) {
+            _state.update { it.copy(autoStartError = "This device doesn't support companion auto-start.") }
+            return
+        }
+        // Persist the chosen adapter before wiring the OS to it.
+        settings.saveConnection(config)
+        _state.update { it.copy(autoStartError = null) }
+        if (companion.isAssociated(address)) {
+            finishEnable(address)
+            return
+        }
+        companion.associate(address) { result ->
+            when (result) {
+                is ObdCompanionManager.AssociateResult.Pending ->
+                    _state.update { it.copy(pendingAssociation = result.intentSender) }
+                is ObdCompanionManager.AssociateResult.Created -> finishEnable(address)
+                is ObdCompanionManager.AssociateResult.Failed ->
+                    _state.update { it.copy(autoStartError = result.reason?.toString() ?: "Association failed.") }
+            }
+        }
+    }
+
+    private fun finishEnable(address: String) {
+        settings.autoStartEnabled = true
+        companion.startObserving(address)
+        _state.update { it.copy(autoStartEnabled = true, autoStartError = null) }
+    }
+
+    private fun disableAutoStart() {
+        settings.autoStartEnabled = false
+        _state.value.config.deviceAddress?.let { companion.disassociate(it) }
+        _state.update { it.copy(autoStartEnabled = false, autoStartError = null) }
+    }
+
+    /** The screen has launched [ObdConnUiState.pendingAssociation]; clear it so it fires once. */
+    fun consumePendingAssociation() = _state.update { it.copy(pendingAssociation = null) }
+
+    /** The user dismissed the system association dialog without confirming. */
+    fun onAssociationCancelled() =
+        _state.update { it.copy(autoStartError = "Auto-start setup was cancelled.") }
 
     @SuppressLint("MissingPermission") // caller requests BLUETOOTH_CONNECT before invoking
     fun refreshBondedDevices() {
