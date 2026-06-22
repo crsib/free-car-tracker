@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive # vendored kotlin-obd-api is compiled from sources
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
