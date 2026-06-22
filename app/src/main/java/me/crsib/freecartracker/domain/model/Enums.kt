@@ -65,3 +65,25 @@ enum class Recurrence {
     QUARTERLY,
     YEARLY,
 }
+
+/** Lifecycle of a telemetry recording session (a Trip). */
+@Serializable
+enum class TripStatus {
+    /** Recording is in progress (or was, before a crash). */
+    RECORDING,
+
+    /** Stopped cleanly by the user. */
+    COMPLETED,
+
+    /** Ended unexpectedly (process death, fatal error); finalized from partial data. */
+    ABORTED,
+}
+
+/** How the OBD adapter is connected during a trip. [NONE] means a GPS-only trip. */
+@Serializable
+enum class ObdTransportKind {
+    NONE,
+    BT_CLASSIC,
+    BLE,
+    WIFI,
+}
