@@ -27,8 +27,17 @@ class TelemetrySettingsStore(context: Context) {
         get() = prefs.getBoolean(KEY_AUTO_START, false)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
 
+    /**
+     * Vehicle this adapter is bound to. Trips it auto-starts are recorded under this car; null means
+     * fall back to whichever vehicle is currently selected.
+     */
+    var adapterVehicleId: Long?
+        get() = prefs.getLong(KEY_ADAPTER_VEHICLE, -1L).takeIf { it >= 0 }
+        set(value) = prefs.edit().putLong(KEY_ADAPTER_VEHICLE, value ?: -1L).apply()
+
     private companion object {
         const val KEY_CONNECTION = "obd_connection"
         const val KEY_AUTO_START = "auto_start_recording"
+        const val KEY_ADAPTER_VEHICLE = "adapter_vehicle_id"
     }
 }

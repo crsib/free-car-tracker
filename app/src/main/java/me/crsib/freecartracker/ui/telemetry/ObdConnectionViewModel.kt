@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.crsib.freecartracker.data.entity.Vehicle
+import me.crsib.freecartracker.data.repository.VehicleRepository
 import me.crsib.freecartracker.domain.model.ObdTransportKind
 import me.crsib.freecartracker.telemetry.companion.ObdCompanionManager
 import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
@@ -35,6 +37,9 @@ data class ObdConnUiState(
     /** One-shot: a system association dialog the screen must launch from an Activity. */
     val pendingAssociation: IntentSender? = null,
     val autoStartError: String? = null,
+    val vehicles: List<Vehicle> = emptyList(),
+    /** Vehicle bound to this adapter, or null to use the currently-selected one. */
+    val adapterVehicleId: Long? = null,
 )
 
 class ObdConnectionViewModel(
@@ -43,15 +48,31 @@ class ObdConnectionViewModel(
     private val transportFactory: TransportFactory,
     private val locationFactory: LocationSourceFactory,
     private val companion: ObdCompanionManager,
+    private val vehicleRepo: VehicleRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
         ObdConnUiState(
             config = settings.loadConnection(),
             autoStartEnabled = settings.autoStartEnabled,
+            adapterVehicleId = settings.adapterVehicleId,
         ),
     )
     val state: StateFlow<ObdConnUiState> = _state.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            vehicleRepo.observeActive().collect { list ->
+                _state.update { it.copy(vehicles = list) }
+            }
+        }
+    }
+
+    /** Bind this adapter to a vehicle (or null to follow the current selection). Persisted at once. */
+    fun setAdapterVehicle(id: Long?) {
+        settings.adapterVehicleId = id
+        _state.update { it.copy(adapterVehicleId = id) }
+    }
 
     private fun updateConfig(block: (ObdConnectionConfig) -> ObdConnectionConfig) =
         _state.update { it.copy(config = block(it.config), testResult = null) }

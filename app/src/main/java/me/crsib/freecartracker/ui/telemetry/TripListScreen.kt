@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.domain.model.TripStatus
 import me.crsib.freecartracker.telemetry.data.entity.Trip
+import me.crsib.freecartracker.ui.components.VehicleSwitcher
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatDuration
@@ -54,7 +55,18 @@ fun TripListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Trips") },
+                title = {
+                    val vehicle = state.vehicle
+                    if (vehicle != null) {
+                        VehicleSwitcher(
+                            vehicles = state.vehicles,
+                            selected = vehicle,
+                            onSelect = vm::selectVehicle,
+                        )
+                    } else {
+                        Text("Trips")
+                    }
+                },
                 actions = {
                     IconButton(onClick = onOpenConnection) {
                         Icon(Icons.Filled.Settings, contentDescription = "OBD connection")

@@ -34,6 +34,7 @@ data class HistoryItem(
 data class HistoryUiState(
     val loading: Boolean = true,
     val vehicle: Vehicle? = null,
+    val vehicles: List<Vehicle> = emptyList(),
     val items: List<HistoryItem> = emptyList(),
     val filter: Set<EntryKind> = EntryKind.entries.toSet(),
     val query: String = "",
@@ -129,7 +130,11 @@ class HistoryViewModel(
                     )
                 }
             }
+        }.combine(selection.observeActive()) { state, vehicles ->
+            state.copy(vehicles = vehicles)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HistoryUiState())
+
+    fun selectVehicle(id: Long) = viewModelScope.launch { selection.select(id) }
 
     fun toggleFilter(kind: EntryKind) {
         filter.value = filter.value.toMutableSet().apply {

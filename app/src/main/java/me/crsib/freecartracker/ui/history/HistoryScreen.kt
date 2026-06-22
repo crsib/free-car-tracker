@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.domain.model.EntryKind
+import me.crsib.freecartracker.ui.components.VehicleSwitcher
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatMoney
@@ -54,7 +55,22 @@ fun HistoryScreen(
     val state by vm.uiState.collectAsStateWithLifecycle()
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(state.vehicle?.name ?: "History") }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    val vehicle = state.vehicle
+                    if (vehicle != null) {
+                        VehicleSwitcher(
+                            vehicles = state.vehicles,
+                            selected = vehicle,
+                            onSelect = vm::selectVehicle,
+                        )
+                    } else {
+                        Text("History")
+                    }
+                },
+            )
+        },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(

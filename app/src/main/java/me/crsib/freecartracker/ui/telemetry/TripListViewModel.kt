@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -18,6 +19,7 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
 data class TripListUiState(
     val loading: Boolean = true,
     val vehicle: Vehicle? = null,
+    val vehicles: List<Vehicle> = emptyList(),
     val trips: List<Trip> = emptyList(),
 )
 
@@ -38,7 +40,12 @@ class TripListViewModel(
                     }
                 }
             }
+            .combine(selection.observeActive()) { state, vehicles ->
+                state.copy(vehicles = vehicles)
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TripListUiState())
+
+    fun selectVehicle(id: Long) = viewModelScope.launch { selection.select(id) }
 
     fun deleteTrip(id: Long) = viewModelScope.launch { telemetryRepo.deleteTrip(id) }
 }

@@ -42,6 +42,7 @@ import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.Powertrain
 import me.crsib.freecartracker.ui.components.Sparkline
+import me.crsib.freecartracker.ui.components.VehicleSwitcher
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.costBucketLabel
 import me.crsib.freecartracker.ui.util.formatDate
@@ -226,30 +227,6 @@ private fun costPerDistanceLabel(
         costPerKmMinor
     }
     return formatMoney(perDisplay.roundToLong(), vehicle.currency)
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun VehicleSwitcher(
-    vehicles: List<Vehicle>,
-    selected: Vehicle,
-    onSelect: (Long) -> Unit,
-) {
-    var open by remember { mutableStateOf(false) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { open = true }) {
-            Text(selected.name, style = MaterialTheme.typography.titleLarge)
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Switch vehicle")
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            vehicles.forEach { v ->
-                DropdownMenuItem(
-                    text = { Text(v.name) },
-                    onClick = { open = false; onSelect(v.id) },
-                )
-            }
-        }
-    }
 }
 
 @Composable

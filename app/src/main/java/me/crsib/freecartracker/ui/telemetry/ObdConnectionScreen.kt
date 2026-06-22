@@ -55,6 +55,7 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
             c.transportFactory,
             c.locationSourceFactory,
             c.obdCompanionManager,
+            c.vehicleRepository,
         )
     }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -130,6 +131,12 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
             if (config.kind == ObdTransportKind.BLE) {
                 BleAdvancedCard(config.bleServiceUuid, config.bleNotifyUuid, config.bleWriteUuid, vm)
             }
+
+            AssociatedVehicleCard(
+                vehicles = state.vehicles,
+                selectedId = state.adapterVehicleId,
+                onSelect = vm::setAdapterVehicle,
+            )
 
             if (config.kind == ObdTransportKind.BT_CLASSIC) {
                 AutoStartCard(state = state, onToggle = vm::setAutoStart)
@@ -268,6 +275,43 @@ private fun AutoStartCard(state: ObdConnUiState, onToggle: (Boolean) -> Unit) {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
         }
+    }
+}
+
+@Composable
+private fun AssociatedVehicleCard(
+    vehicles: List<me.crsib.freecartracker.data.entity.Vehicle>,
+    selectedId: Long?,
+    onSelect: (Long?) -> Unit,
+) {
+    if (vehicles.isEmpty()) return
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Associated vehicle", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Trips this adapter auto-starts are recorded for this car. " +
+                    "Keep \"Selected vehicle\" to use whichever car is currently active.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            VehicleOption("Selected vehicle", selected = selectedId == null) { onSelect(null) }
+            vehicles.forEach { v ->
+                VehicleOption(v.name, selected = selectedId == v.id) { onSelect(v.id) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VehicleOption(name: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Text(name)
     }
 }
 

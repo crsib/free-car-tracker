@@ -35,11 +35,23 @@ class ObdCompanionService : CompanionDeviceService() {
     private fun maybeStartRecording() {
         if (!container.telemetrySettings.autoStartEnabled) return
         if (container.tripRecorder.isRecording) return
-        // Resolve the currently-selected vehicle (falls back to the first active one). A quick
-        // local DataStore read inside the presence window; nothing to record without a vehicle.
-        val vehicle = runCatching {
-            runBlocking { container.vehicleSelection.observeSelected().first() }
-        }.getOrNull() ?: return
-        TelemetryService.start(this, vehicle.id)
+        val vehicleId = resolveVehicleId() ?: return
+        TelemetryService.start(this, vehicleId)
     }
+
+    /**
+     * Pick the car to record for. Prefer the vehicle bound to this adapter (if it still exists);
+     * otherwise fall back to the currently-selected vehicle. A quick DB/DataStore read inside the
+     * presence window; nothing to record without a vehicle.
+     */
+    private fun resolveVehicleId(): Long? = runCatching {
+        runBlocking {
+            val bound = container.telemetrySettings.adapterVehicleId
+            if (bound != null && container.vehicleRepository.getById(bound) != null) {
+                bound
+            } else {
+                container.vehicleSelection.observeSelected().first()?.id
+            }
+        }
+    }.getOrNull()
 }
