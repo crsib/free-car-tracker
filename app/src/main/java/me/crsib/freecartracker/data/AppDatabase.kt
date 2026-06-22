@@ -41,7 +41,7 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
         DtcRecord::class,
     ],
     views = [CostView::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -150,8 +150,42 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v4 adds a stable cross-device [syncId] (UUID) to vehicles and trips for WebDAV
+         * folder identity, plus [Trip.syncedAtMillis] to track which trips are uploaded.
+         * Existing rows are backfilled with distinct UUIDs synthesized in pure SQLite:
+         * `randomblob` is re-evaluated per row, so each gets a unique value.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `vehicles` ADD COLUMN `syncId` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `trips` ADD COLUMN `syncId` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `trips` ADD COLUMN `syncedAtMillis` INTEGER")
+                db.execSQL(uuidBackfillSql("vehicles"))
+                db.execSQL(uuidBackfillSql("trips"))
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_vehicles_syncId` " +
+                        "ON `vehicles` (`syncId`)",
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_trips_syncId` " +
+                        "ON `trips` (`syncId`)",
+                )
+            }
+
+            /** Canonical 8-4-4-4-12 UUIDv4 string assembled from random bytes, per row. */
+            private fun uuidBackfillSql(table: String): String =
+                "UPDATE `$table` SET `syncId` = " +
+                    "lower(hex(randomblob(4))) || '-' || " +
+                    "lower(hex(randomblob(2))) || '-4' || " +
+                    "substr(lower(hex(randomblob(2))), 2) || '-' || " +
+                    "substr('89ab', abs(random()) % 4 + 1, 1) || " +
+                    "substr(lower(hex(randomblob(2))), 2) || '-' || " +
+                    "lower(hex(randomblob(6)))"
+        }
+
         /** All migrations, in order. Exposed so the migration test can validate them. */
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {

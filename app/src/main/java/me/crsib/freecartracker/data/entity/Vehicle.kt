@@ -1,14 +1,20 @@
 package me.crsib.freecartracker.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 import me.crsib.freecartracker.domain.model.FuelType
 import me.crsib.freecartracker.domain.model.Powertrain
 import me.crsib.freecartracker.domain.model.UnitSystem
+import java.util.UUID
 
 @Serializable
-@Entity(tableName = "vehicles")
+@Entity(
+    tableName = "vehicles",
+    indices = [Index("syncId", unique = true)],
+)
 data class Vehicle(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -31,4 +37,6 @@ data class Vehicle(
     val colorArgb: Int? = null,
     val isArchived: Boolean = false,
     val createdAt: Long,
+    /** Stable cross-device identity (UUID), used as the WebDAV folder key. */
+    @ColumnInfo(defaultValue = "") val syncId: String = UUID.randomUUID().toString(),
 )
