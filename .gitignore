@@ -20,3 +20,12 @@ keystore.properties
 
 # Stray ELM327/OBD debug capture log
 /elm.log
+
+# Lixiang DTC database (extracted third-party data — keep private)
+/reference/lixiang-dtc/
+
+# OBD reverse-engineering: keep the honeypot tool + findings, drop the heavy
+# capture artifacts (screenshots, multi-MB logs/CSVs, pycache).
+/tools/*
+!/tools/carscanner_capture.py
+!/tools/li-profile-pids.md
