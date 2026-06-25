@@ -48,6 +48,39 @@ class WebDavSyncManager(
     /** Manual "Backup now" — runs a full sync. */
     suspend fun backupNow(now: Long): Result<Unit> = syncNow(now).map { }
 
+    /**
+     * Upload one UDS DID-scan CSV. DIDs are vehicle-specific, so it lands under the car's folder
+     * (`{vehicleSyncId}/did-scans/{name}.gz`); pass a null [vehicleSyncId] to use a top-level
+     * `did-scans/` folder when no car is known. Stored gzipped, like trip files. Returns the remote
+     * relative path. Independent of [syncNow] — the pull walk ignores this folder.
+     */
+    suspend fun uploadDidScan(vehicleSyncId: String?, name: String, csv: ByteArray): Result<String> =
+        runCatching {
+            val config = store.load()
+            check(config.isConfigured) { "WebDAV not configured" }
+            val dir = WebDavPaths.didScansDir(vehicleSyncId)
+            client.ensureCollection(config, dir).getOrThrow()
+            val remote = "$dir$name.gz"
+            client.putGzip(config, remote, csv).getOrThrow()
+            remote
+        }
+
+    /**
+     * Upload a diagnostic CSV only if it isn't already on the server — the retry path for files whose
+     * inline upload failed offline. Returns true if uploaded, false if it was already there.
+     */
+    suspend fun uploadDidScanIfMissing(vehicleSyncId: String?, name: String, csv: ByteArray): Result<Boolean> =
+        runCatching {
+            val config = store.load()
+            check(config.isConfigured) { "WebDAV not configured" }
+            val dir = WebDavPaths.didScansDir(vehicleSyncId)
+            val remote = "$dir$name.gz"
+            if (client.exists(config, remote).getOrDefault(false)) return@runCatching false
+            client.ensureCollection(config, dir).getOrThrow()
+            client.putGzip(config, remote, csv).getOrThrow()
+            true
+        }
+
     /** Manual "Restore" — runs a full sync and reports what moved. */
     suspend fun restoreNow(): Result<String> = syncNow(System.currentTimeMillis()).map { it.summary() }
 

@@ -21,6 +21,9 @@ object WebDavPaths {
     const val OBD_CSV_GZ = "obd.csv.gz"
     const val TRACK_GPX_GZ = "track.gpx.gz"
 
+    /** Folder holding UDS DID-scan CSVs. Lives beside trips/ under a car, or at the root if car-less. */
+    const val DID_SCANS = "did-scans"
+
     private val YEAR = DateTimeFormatter.ofPattern("yyyy").withZone(ZoneOffset.UTC)
     private val MONTH = DateTimeFormatter.ofPattern("MM").withZone(ZoneOffset.UTC)
 
@@ -30,6 +33,14 @@ object WebDavPaths {
     fun ledgerBak(vehicleSyncId: String): String = "$vehicleSyncId/$LEDGER_BAK"
 
     fun tripsRoot(vehicleSyncId: String): String = "$vehicleSyncId/trips/"
+
+    /**
+     * Folder for DID-scan CSVs: `{vehicleSyncId}/did-scans/` when the scan is tied to a car, or a
+     * top-level `did-scans/` when no car is known. The pull walk only descends `trips/`, so this
+     * folder is safely ignored by sync.
+     */
+    fun didScansDir(vehicleSyncId: String?): String =
+        if (vehicleSyncId != null) "$vehicleSyncId/$DID_SCANS/" else "$DID_SCANS/"
 
     /** `{vehicleSyncId}/trips/YYYY/MM/` derived from the trip's start time (UTC). */
     fun monthBucket(vehicleSyncId: String, startedAtMillis: Long): String {
