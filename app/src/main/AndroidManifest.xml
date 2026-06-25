@@ -11,7 +11,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- Auto-start recording when the paired adapter comes into range (CompanionDeviceManager).
-         All are normal/install-time permissions granted without a runtime prompt. -->
+         The uses-feature is mandatory: without it CompanionDeviceManager.associate() throws
+         IllegalStateException. All permissions are normal/install-time, no runtime prompt. -->
+    <uses-feature android:name="android.software.companion_device_setup" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
     <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
     <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />

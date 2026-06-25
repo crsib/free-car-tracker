@@ -59,15 +59,19 @@ class ObdCompanionManager(private val context: Context) {
             .addDeviceFilter(BluetoothDeviceFilter.Builder().setAddress(address).build())
             .setSingleDevice(true)
             .build()
-        manager.associate(request, context.mainExecutor, object : CompanionDeviceManager.Callback() {
-            override fun onAssociationPending(intentSender: IntentSender) =
-                onResult(AssociateResult.Pending(intentSender))
+        // associate() can throw synchronously (e.g. IllegalStateException if the OS rejects the
+        // request) rather than routing through onFailure, so guard it to surface a Failed result.
+        runCatching {
+            manager.associate(request, context.mainExecutor, object : CompanionDeviceManager.Callback() {
+                override fun onAssociationPending(intentSender: IntentSender) =
+                    onResult(AssociateResult.Pending(intentSender))
 
-            override fun onAssociationCreated(associationInfo: AssociationInfo) =
-                onResult(AssociateResult.Created(associationInfo))
+                override fun onAssociationCreated(associationInfo: AssociationInfo) =
+                    onResult(AssociateResult.Created(associationInfo))
 
-            override fun onFailure(error: CharSequence?) = onResult(AssociateResult.Failed(error))
-        })
+                override fun onFailure(error: CharSequence?) = onResult(AssociateResult.Failed(error))
+            })
+        }.onFailure { onResult(AssociateResult.Failed(it.message)) }
     }
 
     /** Start OS-level presence monitoring for [address]; the adapter must already be associated. */
