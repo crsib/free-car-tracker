@@ -24,6 +24,11 @@ data class LiveTelemetry(
     val controlModuleVoltage: Double? = null,
     val fuelLevelPct: Double? = null,
     val hybridBatteryLifePct: Double? = null,
+    val hvBatteryVoltage: Double? = null,
+    val hvBatteryCurrent: Double? = null,
+    /** Derived HV battery power (kW) = voltage × current / 1000; negative = regen/charge. */
+    val hvBatteryPowerKw: Double? = null,
+    val odometerKm: Double? = null,
     /** Manufacturer Mode 22 metrics (EV SoC, motor temp, …) keyed by metricKey. */
     val extended: Map<String, Double> = emptyMap(),
     val latitude: Double? = null,

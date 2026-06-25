@@ -29,4 +29,11 @@ class PidDefinition(
     val group: MetricGroup,
     val priority: PollPriority,
     val storage: Storage,
+    /**
+     * When true this Mode 01 PID is polled even if it's absent from the supported-PID bitmask.
+     * Used for high-range PIDs (≥ 0x80) the AvailablePIDs discovery doesn't probe, and where the
+     * bitmask read is unreliable anyway (multiple ECUs answer the broadcast). [ObdSession.query]
+     * returns null on NO DATA, so polling an unsupported PID is harmless.
+     */
+    val skipDiscoveryGate: Boolean = false,
 )

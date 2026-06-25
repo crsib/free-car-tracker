@@ -172,8 +172,9 @@ class TripRecorder(
                 session.initialize()
                 val supported = runCatching { session.discoverSupportedPids() }.getOrDefault(emptySet())
                 val defs = profile.pids.filter { def ->
-                    // Keep non-Mode-01 (manufacturer) PIDs; filter Mode 01 by discovery when available.
-                    def.command.mode != "01" || supported.isEmpty() ||
+                    // Keep non-Mode-01 (manufacturer) PIDs and discovery-exempt ones; filter the
+                    // rest of Mode 01 by the supported-PID bitmask when discovery succeeded.
+                    def.skipDiscoveryGate || def.command.mode != "01" || supported.isEmpty() ||
                         def.command.pid.uppercase() in supported
                 }
                 val poller = AdaptivePoller(session, AdaptivePollSchedule.from(defs))
@@ -280,6 +281,8 @@ class TripRecorder(
                 )
             }
         }
+        val hvV = wide["hvBatteryVoltage"]
+        val hvA = wide["hvBatteryCurrent"]
         _liveState.update { state ->
             state.copy(
                 speedKmh = wide["speedKmh"] ?: state.speedKmh,
@@ -290,6 +293,10 @@ class TripRecorder(
                 controlModuleVoltage = wide["controlModuleVoltage"] ?: state.controlModuleVoltage,
                 fuelLevelPct = wide["fuelLevelPct"] ?: state.fuelLevelPct,
                 hybridBatteryLifePct = wide["hybridBatteryLifePct"] ?: state.hybridBatteryLifePct,
+                hvBatteryVoltage = hvV ?: state.hvBatteryVoltage,
+                hvBatteryCurrent = hvA ?: state.hvBatteryCurrent,
+                hvBatteryPowerKw = if (hvV != null && hvA != null) hvV * hvA / 1000.0 else state.hvBatteryPowerKw,
+                odometerKm = wide["odometerKm"] ?: state.odometerKm,
                 obdConnected = true,
                 extended = if (extended.isEmpty()) {
                     state.extended
@@ -302,6 +309,8 @@ class TripRecorder(
 
     private fun buildObdSample(tripId: Long, ts: Long, m: Map<String, Double>): ObdSample {
         val l100 = DerivedMetrics.l100(m["fuelRateLph"], m["mafGramsPerSec"], m["speedKmh"])
+        val hvV = m["hvBatteryVoltage"]
+        val hvA = m["hvBatteryCurrent"]
         return ObdSample(
             tripId = tripId,
             timestampMillis = ts,
@@ -311,6 +320,7 @@ class TripRecorder(
             engineLoadPct = m["engineLoadPct"],
             runTimeSec = m["runTimeSec"]?.toInt(),
             coolantTempC = m["coolantTempC"],
+            timingAdvanceDeg = m["timingAdvanceDeg"],
             intakeAirTempC = m["intakeAirTempC"],
             ambientAirTempC = m["ambientAirTempC"],
             mafGramsPerSec = m["mafGramsPerSec"],
@@ -320,7 +330,11 @@ class TripRecorder(
             fuelRateLph = m["fuelRateLph"],
             derivedL100 = l100,
             derivedCo2Gkm = DerivedMetrics.co2GkmFromL100(l100),
+            odometerKm = m["odometerKm"],
             hybridBatteryLifePct = m["hybridBatteryLifePct"],
+            hvBatteryVoltage = hvV,
+            hvBatteryCurrent = hvA,
+            hvBatteryPowerKw = if (hvV != null && hvA != null) hvV * hvA / 1000.0 else null,
         )
     }
 

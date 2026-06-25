@@ -26,8 +26,14 @@ class MigrationTest {
     @Test
     fun migrateAll_fromV1() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Validate the full chain (1 -> 2 -> 3 -> 4) against the exported v4 schema.
-        helper.runMigrationsAndValidate(TEST_DB, 4, true, *AppDatabase.ALL_MIGRATIONS)
+        // Validate the full chain (1 -> 2 -> 3 -> 4 -> 5) against the exported v5 schema.
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, *AppDatabase.ALL_MIGRATIONS)
+    }
+
+    @Test
+    fun migrate4To5_addsEvTelemetryColumns() {
+        helper.createDatabase(TEST_DB, 4).close()
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, *AppDatabase.ALL_MIGRATIONS)
     }
 
     @Test

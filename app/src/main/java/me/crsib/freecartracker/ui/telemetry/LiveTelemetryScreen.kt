@@ -234,8 +234,12 @@ private fun buildTiles(live: me.crsib.freecartracker.telemetry.service.LiveTelem
         add(Tile("Fuel level", live.fuelLevelPct.pct()))
         add(Tile("Distance", "${formatNumber(live.distanceKm)} km"))
         add(Tile("Elapsed", formatDuration(live.elapsedSec)))
+        live.odometerKm?.let { add(Tile("Odometer", "${formatNumber(it)} km")) }
         if (showEv) {
             add(Tile("Hybrid batt.", live.hybridBatteryLifePct.pct()))
+            live.hvBatteryPowerKw?.let { add(Tile("HV power", "${formatNumber(it)} kW")) }
+            live.hvBatteryVoltage?.let { add(Tile("HV voltage", "${formatNumber(it)} V")) }
+            live.hvBatteryCurrent?.let { add(Tile("HV current", "${formatNumber(it)} A")) }
             live.extended[ExtendedKeys.EV_SOC]?.let { add(Tile("EV charge", "${formatNumber(it)} %")) }
             live.extended[ExtendedKeys.MOTOR_TEMP]?.let { add(Tile("Motor temp", "${formatNumber(it)} °C")) }
         }

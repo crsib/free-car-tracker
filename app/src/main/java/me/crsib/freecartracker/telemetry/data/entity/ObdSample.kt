@@ -38,6 +38,7 @@ data class ObdSample(
     val runTimeSec: Int? = null, // 0x1F
     // Engine health
     val coolantTempC: Double? = null, // 0x05
+    val timingAdvanceDeg: Double? = null, // 0x0E
     val intakeAirTempC: Double? = null, // 0x0F
     val ambientAirTempC: Double? = null, // 0x46
     val mafGramsPerSec: Double? = null, // 0x10
@@ -50,6 +51,12 @@ data class ObdSample(
     val derivedL100: Double? = null,
     /** Derived CO2 (g/km) from fuel consumption. */
     val derivedCo2Gkm: Double? = null,
-    // Hybrid/EV standard PID
+    // Odometer
+    val odometerKm: Double? = null, // 0xA6
+    // Hybrid/EV standard PIDs
     val hybridBatteryLifePct: Double? = null, // 0x5B
+    val hvBatteryVoltage: Double? = null, // 0x9A
+    val hvBatteryCurrent: Double? = null, // 0x9A (signed; negative = regen/charge)
+    /** Derived HV battery power (kW) = voltage × current / 1000. */
+    val hvBatteryPowerKw: Double? = null,
 )

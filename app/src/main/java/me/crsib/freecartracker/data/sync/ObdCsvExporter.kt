@@ -25,6 +25,7 @@ internal object ObdCsvSchema {
         ObdStdCol("engineLoadPct", { it.engineLoadPct }, { s, v -> s.copy(engineLoadPct = v) }),
         ObdStdCol("runTimeSec", { it.runTimeSec?.toDouble() }, { s, v -> s.copy(runTimeSec = v?.toInt()) }),
         ObdStdCol("coolantTempC", { it.coolantTempC }, { s, v -> s.copy(coolantTempC = v) }),
+        ObdStdCol("timingAdvanceDeg", { it.timingAdvanceDeg }, { s, v -> s.copy(timingAdvanceDeg = v) }),
         ObdStdCol("intakeAirTempC", { it.intakeAirTempC }, { s, v -> s.copy(intakeAirTempC = v) }),
         ObdStdCol("ambientAirTempC", { it.ambientAirTempC }, { s, v -> s.copy(ambientAirTempC = v) }),
         ObdStdCol("mafGramsPerSec", { it.mafGramsPerSec }, { s, v -> s.copy(mafGramsPerSec = v) }),
@@ -34,7 +35,11 @@ internal object ObdCsvSchema {
         ObdStdCol("fuelRateLph", { it.fuelRateLph }, { s, v -> s.copy(fuelRateLph = v) }),
         ObdStdCol("derivedL100", { it.derivedL100 }, { s, v -> s.copy(derivedL100 = v) }),
         ObdStdCol("derivedCo2Gkm", { it.derivedCo2Gkm }, { s, v -> s.copy(derivedCo2Gkm = v) }),
+        ObdStdCol("odometerKm", { it.odometerKm }, { s, v -> s.copy(odometerKm = v) }),
         ObdStdCol("hybridBatteryLifePct", { it.hybridBatteryLifePct }, { s, v -> s.copy(hybridBatteryLifePct = v) }),
+        ObdStdCol("hvBatteryVoltage", { it.hvBatteryVoltage }, { s, v -> s.copy(hvBatteryVoltage = v) }),
+        ObdStdCol("hvBatteryCurrent", { it.hvBatteryCurrent }, { s, v -> s.copy(hvBatteryCurrent = v) }),
+        ObdStdCol("hvBatteryPowerKw", { it.hvBatteryPowerKw }, { s, v -> s.copy(hvBatteryPowerKw = v) }),
     )
 
     val byName: Map<String, ObdStdCol> = standard.associateBy { it.name }

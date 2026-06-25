@@ -51,4 +51,16 @@ class PidProfileRegistryTest {
         assertTrue(keys.containsAll(setOf("speedKmh", "rpm", "throttlePct", "engineLoadPct")))
         assertTrue("hybridBatteryLifePct" in keys)
     }
+
+    @Test
+    fun baselineIncludesHvPackOdometerAndTimingPids() {
+        val byKey = StandardPidProfile.pids.associateBy { it.key }
+        assertTrue(byKey.keys.containsAll(setOf("hvBatteryVoltage", "hvBatteryCurrent", "odometerKm", "timingAdvanceDeg")))
+        // The high-range PIDs (0x9A, 0xA6) must bypass the supported-PID discovery gate.
+        assertTrue(byKey.getValue("hvBatteryVoltage").skipDiscoveryGate)
+        assertTrue(byKey.getValue("hvBatteryCurrent").skipDiscoveryGate)
+        assertTrue(byKey.getValue("odometerKm").skipDiscoveryGate)
+        // Timing advance (0x0E) is in a discovered range, so it stays gated.
+        assertEquals(false, byKey.getValue("timingAdvanceDeg").skipDiscoveryGate)
+    }
 }

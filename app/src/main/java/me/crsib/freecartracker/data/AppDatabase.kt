@@ -41,7 +41,7 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
         DtcRecord::class,
     ],
     views = [CostView::class],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -184,8 +184,25 @@ abstract class AppDatabase : RoomDatabase() {
                     "lower(hex(randomblob(6)))"
         }
 
+        /**
+         * v5 adds EV/odometer telemetry columns to `obd_samples`: timing advance (PID 0x0E),
+         * odometer (0xA6), and HV pack voltage/current/derived-power (0x9A). All nullable, so
+         * existing rows just get NULLs.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (col in listOf(
+                    "timingAdvanceDeg", "odometerKm",
+                    "hvBatteryVoltage", "hvBatteryCurrent", "hvBatteryPowerKw",
+                )) {
+                    db.execSQL("ALTER TABLE `obd_samples` ADD COLUMN `$col` REAL")
+                }
+            }
+        }
+
         /** All migrations, in order. Exposed so the migration test can validate them. */
-        val ALL_MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        val ALL_MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
