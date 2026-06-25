@@ -37,6 +37,7 @@ object TripAggregator {
 
         val movingSec = movingSeconds(gps, obd)
         val fuelUsedL = fuelUsedLitres(obd)
+        val energyUsedKwh = batteryEnergyKwh(obd)
         val avgConsumption = if (fuelUsedL != null && distanceKm != null && distanceKm > 0) {
             fuelUsedL / distanceKm * 100.0
         } else {
@@ -50,7 +51,7 @@ object TripAggregator {
             maxSpeedKmh = maxSpeed,
             movingSec = movingSec,
             fuelUsedL = fuelUsedL,
-            energyUsedKwh = null, // requires manufacturer SoC + battery capacity (later)
+            energyUsedKwh = energyUsedKwh,
             avgConsumptionL100 = avgConsumption,
             obdSampleCount = obd.size,
             gpsPointCount = gps.size,
@@ -98,6 +99,24 @@ object TripAggregator {
             if (avg >= MOVING_THRESHOLD_KMH) movingMs += dt
         }
         return movingMs / 1000
+    }
+
+    /**
+     * Integrate HV battery power (kW) over time into net energy (kWh). Power is signed (negative =
+     * regen/charge), so the result is net traction energy: regen during the trip reduces it. Null
+     * when there aren't enough power samples (e.g. an ICE car, or before 0x9A is read).
+     */
+    private fun batteryEnergyKwh(obd: List<ObdSample>): Double? {
+        val withPower = obd.filter { it.hvBatteryPowerKw != null }
+        if (withPower.size < 2) return null
+        var kwh = 0.0
+        for (i in 1 until withPower.size) {
+            val dtHours = (withPower[i].timestampMillis - withPower[i - 1].timestampMillis) / 3_600_000.0
+            if (dtHours <= 0) continue
+            val avgKw = (withPower[i].hvBatteryPowerKw!! + withPower[i - 1].hvBatteryPowerKw!!) / 2.0
+            kwh += avgKw * dtHours
+        }
+        return kwh
     }
 
     /** Integrate fuel rate (L/h) over time, in litres. Null if no fuel-rate samples. */

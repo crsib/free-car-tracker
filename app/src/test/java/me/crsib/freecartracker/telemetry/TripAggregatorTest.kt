@@ -76,6 +76,32 @@ class TripAggregatorTest {
         assertEquals(10.0, agg.avgConsumptionL100!!, 0.2)
     }
 
+    private fun obdPower(tsSec: Long, powerKw: Double) =
+        ObdSample(tripId = 1, timestampMillis = tsSec * 1000, hvBatteryPowerKw = powerKw)
+
+    @Test
+    fun energy_fromHvPowerIntegration() {
+        // 20 kW constant for 3600 s -> 20 kWh
+        val obd = listOf(obdPower(0, 20.0), obdPower(1800, 20.0), obdPower(3600, 20.0))
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertNotNull(agg.energyUsedKwh)
+        assertEquals(20.0, agg.energyUsedKwh!!, 0.01)
+    }
+
+    @Test
+    fun energy_regenIsNettedOut() {
+        // 10 kW draw then 10 kW regen over the same span -> net ~0 kWh (signed power).
+        val obd = listOf(obdPower(0, 10.0), obdPower(3600, -10.0))
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(0.0, agg.energyUsedKwh!!, 0.01)
+    }
+
+    @Test
+    fun energy_nullWithoutPowerSamples() {
+        val obd = listOf(obd(0, 60.0, 6.0), obd(3600, 60.0, 6.0))
+        assertNull(TripAggregator.aggregate(0, 3_600_000, emptyList(), obd).energyUsedKwh)
+    }
+
     @Test
     fun emptyTrip_yieldsNulls() {
         val agg = TripAggregator.aggregate(0, 5_000, emptyList(), emptyList())

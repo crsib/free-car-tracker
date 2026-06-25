@@ -103,6 +103,7 @@ private fun TripDetailContent(data: TripData, onOpenMap: (Long) -> Unit, modifie
                     trip.avgSpeedKmh?.let { Stat("Avg speed", "${formatNumber(it)} km/h") }
                     trip.maxSpeedKmh?.let { Stat("Max speed", "${formatNumber(it)} km/h") }
                     trip.fuelUsedL?.let { Stat("Fuel used", "${formatNumber(it)} L") }
+                    trip.energyUsedKwh?.let { Stat("Energy used", "${formatNumber(it)} kWh") }
                     trip.avgConsumptionL100?.let { Stat("Consumption", "${formatNumber(it)} L/100km") }
                     Stat("OBD samples", trip.obdSampleCount.toString())
                     Stat("GPS points", trip.gpsPointCount.toString())
@@ -113,6 +114,7 @@ private fun TripDetailContent(data: TripData, onOpenMap: (Long) -> Unit, modifie
         ChartCard("Speed (km/h)", series(data.obdSamples) { it.speedKmh })
         ChartCard("RPM", series(data.obdSamples) { it.rpm })
         ChartCard("Consumption (L/100km)", series(data.obdSamples) { it.derivedL100 })
+        ChartCard("HV battery power (kW)", series(data.obdSamples) { it.hvBatteryPowerKw })
 
         if (data.dtcs.isNotEmpty()) {
             ElevatedCard(Modifier.fillMaxWidth()) {
