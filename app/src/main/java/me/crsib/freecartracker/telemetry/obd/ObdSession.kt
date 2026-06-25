@@ -4,6 +4,8 @@ import com.github.eltonvs.obd.command.control.AvailablePIDsCommand
 import com.github.eltonvs.obd.connection.ObdDeviceConnection
 import kotlinx.coroutines.CancellationException
 import me.crsib.freecartracker.telemetry.obd.pid.PidDefinition
+import me.crsib.freecartracker.telemetry.obd.scan.RawObd
+import me.crsib.freecartracker.telemetry.obd.scan.StreamRawObd
 import me.crsib.freecartracker.telemetry.obd.transport.ObdTransport
 
 /**
@@ -33,6 +35,14 @@ class ObdSession(
     } catch (_: Exception) {
         null
     }
+
+    /**
+     * A raw ELM327 channel over the same transport, for the UDS DID scanner
+     * ([me.crsib.freecartracker.telemetry.obd.scan.DidScanner]). Unlike [query] this bypasses the
+     * library's response validation so negative/no-data replies are observable. Use exclusively —
+     * do not poll via [query] while a raw scan is running on the same adapter.
+     */
+    fun openRaw(): RawObd = StreamRawObd(transport.input, transport.output)
 
     /** Discover supported Mode 01 PIDs via the AvailablePIDs bitmask ranges. */
     suspend fun discoverSupportedPids(): Set<String> {

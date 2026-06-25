@@ -23,6 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.domain.model.ObdTransportKind
+import me.crsib.freecartracker.telemetry.obd.scan.ScanContext
+import me.crsib.freecartracker.telemetry.obd.scan.ScanStates
 import me.crsib.freecartracker.ui.containerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +59,7 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
             c.locationSourceFactory,
             c.obdCompanionManager,
             c.vehicleRepository,
+            c.webDavSyncManager,
         )
     }
     val state by vm.state.collectAsStateWithLifecycle()
@@ -157,6 +161,16 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
                                 softWrap = false,
                             )
                         }
+                        OutlinedButton(
+                            onClick = vm::syncDiagnosticFiles,
+                            enabled = !state.diagSyncing,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (state.diagSyncing) "Syncing…" else "Sync diagnostic files to WebDAV", maxLines = 1, softWrap = false)
+                        }
+                    }
+                    state.diagSyncStatus?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                     }
                     state.testResult?.let {
                         Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 12.dp))
@@ -170,6 +184,209 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
                         )
                     }
                 }
+            }
+
+            DidScanCard(
+                state = state,
+                onScan = vm::scanDids,
+                onReprobe = vm::reprobeInteresting,
+                onCancel = vm::cancelScan,
+                onSetState = vm::setScanState,
+                onSetSession = vm::setScanSession,
+                onSweepStd = vm::sweepStandardPids,
+                onCancelStd = vm::cancelStdSweep,
+                onRecordInit = vm::recordInitSequence,
+                onCancelInit = vm::cancelInitRecording,
+            )
+            DidWatchCard(
+                state = state,
+                onInput = vm::setWatchInput,
+                onStart = vm::startWatch,
+                onStop = vm::stopWatch,
+                onToggleExtra = vm::setWatchLogExtra,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DidScanCard(
+    state: ObdConnUiState,
+    onScan: () -> Unit,
+    onReprobe: () -> Unit,
+    onCancel: () -> Unit,
+    onSetState: (String) -> Unit,
+    onSetSession: (String) -> Unit,
+    onSweepStd: () -> Unit,
+    onCancelStd: () -> Unit,
+    onRecordInit: () -> Unit,
+    onCancelInit: () -> Unit,
+) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("UDS DID scan (advanced)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Discovers manufacturer data identifiers (UDS service 22) the standard PIDs don't " +
+                    "expose — for mapping EV signals on cars like Li Auto. Finds live ECUs, then sweeps " +
+                    "for DIDs that return data and saves them to a CSV (also uploaded to WebDAV under the " +
+                    "car's folder when configured). DIDs found unsupported are remembered per state, so " +
+                    "re-scans skip them. Long; you can stop anytime, and it must run on its own.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Text("State", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ScanStates.all.forEach { s ->
+                    FilterChip(
+                        selected = state.scanState == s,
+                        onClick = { onSetState(s) },
+                        label = { Text(s.lowercase().replaceFirstChar { it.uppercase() }) },
+                        enabled = !state.scanning,
+                    )
+                }
+            }
+            Text("Session", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    ScanContext.SESSION_DEFAULT to "Default",
+                    ScanContext.SESSION_EXTENDED to "Extended",
+                ).forEach { (v, label) ->
+                    FilterChip(
+                        selected = state.scanSession == v,
+                        onClick = { onSetSession(v) },
+                        label = { Text(label) },
+                        enabled = !state.scanning,
+                    )
+                }
+            }
+
+            if (state.scanning) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Stop scan") }
+            } else {
+                OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) { Text("Scan UDS DIDs") }
+                OutlinedButton(onClick = onReprobe, modifier = Modifier.fillMaxWidth()) {
+                    Text("Re-probe interesting DIDs")
+                }
+            }
+            state.scanProgress?.let { progress ->
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+            }
+            state.scanStatus?.let {
+                Text(
+                    if (state.scanning) "$it  (${state.scanHits} hits)" else it,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            state.scanCsvPath?.let {
+                Text(
+                    "Saved to: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            Text(
+                "Standard mode-01 sweep: probe 01 00–FF and export which PIDs respond + raw bytes — " +
+                    "run on the real car to pin a metric's PID (e.g. the value that decodes to pack volts).",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            if (state.stdSweeping) {
+                OutlinedButton(onClick = onCancelStd, modifier = Modifier.fillMaxWidth()) { Text("Stop sweep") }
+            } else {
+                OutlinedButton(onClick = onSweepStd, modifier = Modifier.fillMaxWidth()) { Text("Sweep standard PIDs") }
+            }
+            state.stdSweepProgress?.let { progress ->
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+            }
+            state.stdSweepStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            state.stdSweepCsvPath?.let {
+                Text("Saved to: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+
+            Text(
+                "Init recorder: capture the real car's handshake (supported-PID bitmasks, 22 1201 " +
+                    "identification, VIN) so the honeypot can replay it and engage the experimental Li profile offline.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            if (state.initRecording) {
+                OutlinedButton(onClick = onCancelInit, modifier = Modifier.fillMaxWidth()) { Text("Stop init recording") }
+            } else {
+                OutlinedButton(onClick = onRecordInit, modifier = Modifier.fillMaxWidth()) { Text("Record init sequence") }
+            }
+            state.initStatus?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            state.initCsvPath?.let {
+                Text("Saved to: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DidWatchCard(
+    state: ObdConnUiState,
+    onInput: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onToggleExtra: (Boolean) -> Unit,
+) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Live DID watch", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Poll a few DIDs continuously alongside speed & RPM, and log a synchronized CSV " +
+                    "(local + WebDAV) so you can match a DID's value against a known signal — the one " +
+                    "that tracks speed is your candidate. One DID per line as \"HEADER DID\" (e.g. " +
+                    "7E8 2002). Pre-filled from the last scan.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(
+                value = state.watchInput,
+                onValueChange = onInput,
+                label = { Text("DIDs to watch") },
+                enabled = !state.watching,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Switch(checked = state.watchLogExtra, onCheckedChange = onToggleExtra, enabled = !state.watching)
+                Text("Also log coolant & throttle", style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.watching) {
+                OutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) { Text("Stop watch") }
+            } else {
+                OutlinedButton(onClick = onStart, modifier = Modifier.fillMaxWidth()) { Text("Start watch") }
+            }
+            state.watchError?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            // Reference PIDs first (the signals you correlate against), then the watched DIDs.
+            (state.watchRefRows + state.watchRows).forEach { row ->
+                Column(Modifier.padding(top = 4.dp)) {
+                    Text(
+                        "${row.label}  =  ${row.value}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    if (row.hint.isNotEmpty()) {
+                        Text(row.hint, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            state.watchLogPath?.let {
+                Text(
+                    "Log saved to: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
         }
     }
