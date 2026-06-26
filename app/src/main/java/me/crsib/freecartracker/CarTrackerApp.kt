@@ -32,9 +32,11 @@ class CarTrackerApp : Application() {
         runCatching {
             val settings = container.telemetrySettings
             if (settings.autoStartEnabled) {
-                settings.loadConnection().deviceAddress?.let {
-                    container.obdCompanionManager.startObserving(it)
-                }
+                val address = settings.loadConnection().deviceAddress
+                android.util.Log.i("ObdAutoStart", "onCreate re-arm: autoStart on, observing $address")
+                address?.let { container.obdCompanionManager.startObserving(it) }
+            } else {
+                android.util.Log.i("ObdAutoStart", "onCreate re-arm: autoStart disabled — not observing")
             }
         }
         // Re-arm the daily WebDAV backup if the user has enabled it.

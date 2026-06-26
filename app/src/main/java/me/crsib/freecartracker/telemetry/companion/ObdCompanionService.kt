@@ -2,6 +2,7 @@ package me.crsib.freecartracker.telemetry.companion
 
 import android.companion.AssociationInfo
 import android.companion.CompanionDeviceService
+import android.util.Log
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import me.crsib.freecartracker.CarTrackerApp
@@ -21,11 +22,13 @@ class ObdCompanionService : CompanionDeviceService() {
     private val container get() = (application as CarTrackerApp).container
 
     override fun onDeviceAppeared(associationInfo: AssociationInfo) {
+        Log.i(TAG, "onDeviceAppeared: ${associationInfo.deviceMacAddress} — OS woke the service")
         container.tripRecorder.onAdapterPresenceGained()
         maybeStartRecording()
     }
 
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
+        Log.i(TAG, "onDeviceDisappeared: ${associationInfo.deviceMacAddress}")
         // Don't end the trip outright — a brief dropout shouldn't. Just hint the recorder, which
         // auto-ends on a shortened grace once the OBD link is actually down (and a quick reconnect
         // cancels it).
@@ -33,9 +36,20 @@ class ObdCompanionService : CompanionDeviceService() {
     }
 
     private fun maybeStartRecording() {
-        if (!container.telemetrySettings.autoStartEnabled) return
-        if (container.tripRecorder.isRecording) return
-        val vehicleId = resolveVehicleId() ?: return
+        if (!container.telemetrySettings.autoStartEnabled) {
+            Log.i(TAG, "maybeStartRecording: skipped — auto-start disabled in settings")
+            return
+        }
+        if (container.tripRecorder.isRecording) {
+            Log.i(TAG, "maybeStartRecording: skipped — already recording")
+            return
+        }
+        val vehicleId = resolveVehicleId()
+        if (vehicleId == null) {
+            Log.i(TAG, "maybeStartRecording: skipped — no vehicle resolved (none bound/selected)")
+            return
+        }
+        Log.i(TAG, "maybeStartRecording: starting TelemetryService for vehicleId=$vehicleId")
         TelemetryService.start(this, vehicleId)
     }
 
@@ -54,4 +68,8 @@ class ObdCompanionService : CompanionDeviceService() {
             }
         }
     }.getOrNull()
+
+    private companion object {
+        const val TAG = "ObdAutoStart"
+    }
 }

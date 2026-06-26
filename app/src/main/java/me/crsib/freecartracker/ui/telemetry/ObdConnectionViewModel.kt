@@ -212,6 +212,7 @@ class ObdConnectionViewModel(
     private fun finishEnable(address: String) {
         settings.autoStartEnabled = true
         companion.startObserving(address)
+        android.util.Log.i("ObdAutoStart", "finishEnable: associated + observing $address")
         _state.update { it.copy(autoStartEnabled = true, autoStartError = null) }
     }
 
