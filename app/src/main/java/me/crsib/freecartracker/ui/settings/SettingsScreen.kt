@@ -46,8 +46,11 @@ fun SettingsScreen(
     onOpenWebDav: () -> Unit,
     onOpenVehicles: () -> Unit,
 ) {
-    val vm = containerViewModel { c -> SettingsViewModel(c.preferences, c.backupRepository, c.vehicleSelection) }
+    val vm = containerViewModel { c ->
+        SettingsViewModel(c.preferences, c.backupRepository, c.vehicleSelection, c.webDavSyncManager)
+    }
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
+    val syncBusy by vm.syncBusy.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -204,9 +207,16 @@ fun SettingsScreen(
                         "Automatically back up to your own WebDAV server (Nextcloud, ownCloud, …).",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Button(
+                        onClick = {
+                            scope.launch { snackbar.showSnackbar(vm.syncNow(System.currentTimeMillis())) }
+                        },
+                        enabled = vm.isWebDavConfigured && !syncBusy,
+                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    ) { Text("Sync now") }
                     OutlinedButton(
                         onClick = onOpenWebDav,
-                        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     ) { Text("Configure WebDAV") }
                 }
             }

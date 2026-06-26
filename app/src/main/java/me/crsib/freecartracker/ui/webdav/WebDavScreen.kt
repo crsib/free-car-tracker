@@ -134,18 +134,6 @@ fun WebDavScreen(onBack: () -> Unit) {
                     modifier = Modifier.weight(1f),
                 ) { Text("Save") }
             }
-
-            Button(
-                onClick = { vm.syncNow(System.currentTimeMillis()) },
-                enabled = !state.busy && state.isConfigured,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Sync now") }
-
-            Text(
-                "Sync uploads new local trips and ledger changes, then pulls anything recorded on " +
-                    "your other devices. Runs both directions.",
-                style = MaterialTheme.typography.bodySmall,
-            )
         }
     }
 }

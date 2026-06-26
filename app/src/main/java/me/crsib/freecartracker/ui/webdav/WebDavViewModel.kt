@@ -65,24 +65,4 @@ class WebDavViewModel(
             )
         }
     }
-
-    /**
-     * Manual bidirectional sync: push local cars/ledgers/trips, then pull whatever this device is
-     * missing, and report the counts that moved. Same path the worker runs on each trigger.
-     */
-    fun syncNow(now: Long) = viewModelScope.launch {
-        manager.saveConfig(_state.value.toConfig())
-        _state.update { it.copy(busy = true) }
-        val result = manager.syncNow(now)
-        _state.update {
-            it.copy(
-                busy = false,
-                lastBackupMillis = if (result.isSuccess) now else it.lastBackupMillis,
-                message = result.fold(
-                    onSuccess = { report -> "Synced. ${report.summary()}" },
-                    onFailure = { e -> "Sync failed: ${e.message}" },
-                ),
-            )
-        }
-    }
 }

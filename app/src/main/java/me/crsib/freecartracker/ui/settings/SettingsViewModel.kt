@@ -2,8 +2,10 @@ package me.crsib.freecartracker.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -12,11 +14,13 @@ import me.crsib.freecartracker.data.backup.BackupRepository
 import me.crsib.freecartracker.data.backup.RestoreMode
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.prefs.ThemeMode
+import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 
 class SettingsViewModel(
     private val prefs: AppPreferences,
     private val backup: BackupRepository,
     private val vehicleSelection: VehicleSelection,
+    private val webDav: WebDavSyncManager,
 ) : ViewModel() {
 
     val themeMode: StateFlow<ThemeMode> =
@@ -26,7 +30,29 @@ class SettingsViewModel(
             ThemeMode.SYSTEM,
         )
 
+    private val _syncBusy = MutableStateFlow(false)
+    val syncBusy: StateFlow<Boolean> = _syncBusy.asStateFlow()
+
+    /** True when a WebDAV server is configured and a sync can be triggered. */
+    val isWebDavConfigured: Boolean get() = webDav.config().isConfigured
+
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { prefs.setThemeMode(mode) }
+
+    /**
+     * Run a manual bidirectional sync with the same path the worker uses. Returns a
+     * human-readable result message for the snackbar.
+     */
+    suspend fun syncNow(now: Long): String {
+        _syncBusy.value = true
+        return try {
+            webDav.syncNow(now).fold(
+                onSuccess = { report -> "Synced. ${report.summary()}" },
+                onFailure = { e -> "Sync failed: ${e.message}" },
+            )
+        } finally {
+            _syncBusy.value = false
+        }
+    }
 
     suspend fun buildJson(now: Long): String = backup.exportJson(now)
 
