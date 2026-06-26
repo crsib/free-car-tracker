@@ -33,7 +33,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import me.crsib.freecartracker.data.backup.RestoreMode
 import me.crsib.freecartracker.data.webdav.WebDavBackupWorker
 import me.crsib.freecartracker.ui.components.LabeledTextField
 import me.crsib.freecartracker.ui.containerViewModel
@@ -137,16 +136,16 @@ fun WebDavScreen(onBack: () -> Unit) {
             }
 
             Button(
-                onClick = { vm.backupNow(System.currentTimeMillis()) },
+                onClick = { vm.syncNow(System.currentTimeMillis()) },
                 enabled = !state.busy && state.isConfigured,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Back up now") }
+            ) { Text("Sync now") }
 
-            OutlinedButton(
-                onClick = { vm.restore(RestoreMode.REPLACE) },
-                enabled = !state.busy && state.isConfigured,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Restore from WebDAV (replace all)") }
+            Text(
+                "Sync uploads new local trips and ledger changes, then pulls anything recorded on " +
+                    "your other devices. Runs both directions.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

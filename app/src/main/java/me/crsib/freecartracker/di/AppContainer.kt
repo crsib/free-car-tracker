@@ -7,6 +7,7 @@ import me.crsib.freecartracker.data.backup.BackupRepository
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.repository.EntryRepository
 import me.crsib.freecartracker.data.repository.VehicleRepository
+import me.crsib.freecartracker.data.webdav.ConnectivityWatcher
 import me.crsib.freecartracker.data.webdav.SyncStateStore
 import me.crsib.freecartracker.data.webdav.SyncTrigger
 import me.crsib.freecartracker.data.webdav.WebDavClient
@@ -96,5 +97,10 @@ class AppContainer(val appContext: Context) {
         SyncTrigger(appContext) {
             webDavSettingsStore.load().let { it.isConfigured && it.autoBackup }
         }
+    }
+
+    /** Pushes anything parked while offline (e.g. a trip finished with no signal) once we reconnect. */
+    val connectivityWatcher: ConnectivityWatcher by lazy {
+        ConnectivityWatcher(appContext) { syncTrigger.requestSync() }
     }
 }

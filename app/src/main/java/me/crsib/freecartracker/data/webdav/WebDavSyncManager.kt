@@ -45,9 +45,6 @@ class WebDavSyncManager(
     fun saveConfig(config: WebDavConfig) = store.save(config)
     suspend fun testConnection(config: WebDavConfig): Result<Unit> = client.testConnection(config)
 
-    /** Manual "Backup now" — runs a full sync. */
-    suspend fun backupNow(now: Long): Result<Unit> = syncNow(now).map { }
-
     /**
      * Upload one UDS DID-scan CSV. DIDs are vehicle-specific, so it lands under the car's folder
      * (`{vehicleSyncId}/did-scans/{name}.gz`); pass a null [vehicleSyncId] to use a top-level
@@ -80,9 +77,6 @@ class WebDavSyncManager(
             client.putGzip(config, remote, csv).getOrThrow()
             true
         }
-
-    /** Manual "Restore" — runs a full sync and reports what moved. */
-    suspend fun restoreNow(): Result<String> = syncNow(System.currentTimeMillis()).map { it.summary() }
 
     /**
      * Push local vehicles/ledgers/trips, then pull remote ones this device is missing. Cheap when

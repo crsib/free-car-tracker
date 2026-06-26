@@ -2,6 +2,8 @@ package me.crsib.freecartracker.ui.telemetry
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -55,6 +57,23 @@ fun RouteMap(points: List<GpsPoint>, modifier: Modifier = Modifier, interactive:
                 setOnTouchListener { _, _ -> true } // preview: don't steal scroll gestures
             }
         }
+    }
+
+    // osmdroid's online tiles never retry a download that failed while offline, and a static
+    // preview has no pan/zoom to trigger one — so a map opened offline stays blank forever. Drop
+    // the failed/empty tiles and redraw when connectivity returns to force a fresh fetch.
+    DisposableEffect(Unit) {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                mapView.post {
+                    mapView.tileProvider.clearTileCache()
+                    mapView.invalidate()
+                }
+            }
+        }
+        runCatching { cm?.registerDefaultNetworkCallback(callback) }
+        onDispose { runCatching { cm?.unregisterNetworkCallback(callback) } }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current

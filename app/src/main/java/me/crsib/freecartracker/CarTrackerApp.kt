@@ -50,5 +50,8 @@ class CarTrackerApp : Application() {
                 container.syncTrigger.requestSync()
             }
         })
+        // Also sync the moment connectivity returns, so a trip finished offline (no signal in the
+        // car) uploads without waiting for the next app launch. No-ops unless WebDAV is configured.
+        container.connectivityWatcher.start()
     }
 }

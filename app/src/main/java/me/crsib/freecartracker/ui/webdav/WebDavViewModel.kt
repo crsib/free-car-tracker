@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import me.crsib.freecartracker.data.backup.RestoreMode
 import me.crsib.freecartracker.data.webdav.WebDavConfig
 import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 
@@ -67,31 +66,20 @@ class WebDavViewModel(
         }
     }
 
-    fun backupNow(now: Long) = viewModelScope.launch {
+    /**
+     * Manual bidirectional sync: push local cars/ledgers/trips, then pull whatever this device is
+     * missing, and report the counts that moved. Same path the worker runs on each trigger.
+     */
+    fun syncNow(now: Long) = viewModelScope.launch {
         manager.saveConfig(_state.value.toConfig())
         _state.update { it.copy(busy = true) }
-        val result = manager.backupNow(now)
+        val result = manager.syncNow(now)
         _state.update {
             it.copy(
                 busy = false,
                 lastBackupMillis = if (result.isSuccess) now else it.lastBackupMillis,
                 message = result.fold(
-                    onSuccess = { "Backup uploaded." },
-                    onFailure = { e -> "Backup failed: ${e.message}" },
-                ),
-            )
-        }
-    }
-
-    @Suppress("UNUSED_PARAMETER") // mode is legacy; multi-device sync is bidirectional now
-    fun restore(mode: RestoreMode) = viewModelScope.launch {
-        _state.update { it.copy(busy = true) }
-        val result = manager.restoreNow()
-        _state.update {
-            it.copy(
-                busy = false,
-                message = result.fold(
-                    onSuccess = { msg -> "Synced. $msg" },
+                    onSuccess = { report -> "Synced. ${report.summary()}" },
                     onFailure = { e -> "Sync failed: ${e.message}" },
                 ),
             )
