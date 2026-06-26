@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -29,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -141,7 +143,11 @@ private fun TripDetailContent(data: TripData, onOpenMap: (Long) -> Unit, modifie
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(220.dp)
-                            .padding(top = 8.dp),
+                            .padding(top = 8.dp)
+                            // osmdroid's MapView draws past its Compose bounds (Compose doesn't
+                            // clip children by default), so without this the map overflows onto
+                            // the "Route" title and the "Open full map" button below it.
+                            .clip(RoundedCornerShape(12.dp)),
                     )
                     OutlinedButton(
                         onClick = { onOpenMap(trip.id) },
