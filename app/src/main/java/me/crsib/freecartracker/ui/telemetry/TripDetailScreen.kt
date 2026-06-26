@@ -36,7 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.telemetry.data.TripData
 import me.crsib.freecartracker.telemetry.data.entity.ObdSample
-import me.crsib.freecartracker.ui.components.Sparkline
+import me.crsib.freecartracker.ui.components.ChartPoint
+import me.crsib.freecartracker.ui.components.TripChart
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatDuration
@@ -113,10 +114,13 @@ private fun TripDetailContent(data: TripData, onOpenMap: (Long) -> Unit, modifie
             }
         }
 
-        ChartCard("Speed (km/h)", series(data.obdSamples) { it.speedKmh })
-        ChartCard("RPM", series(data.obdSamples) { it.rpm })
-        ChartCard("Consumption (L/100km)", series(data.obdSamples) { it.derivedL100 })
-        ChartCard("HV battery power (kW)", series(data.obdSamples) { it.hvBatteryPowerKw })
+        ChartCard("Speed (km/h)", "km/h", series(data.obdSamples) { it.speedKmh })
+        ChartCard("RPM", "rpm", series(data.obdSamples) { it.rpm }, decimals = 0)
+        // Fuel usage for fuel-burning cars. Shows only when the adapter reports fuel rate
+        // (PID 0x5E); it's the ICE analog to the HV-battery-power chart below.
+        ChartCard("Fuel rate (L/h)", "L/h", series(data.obdSamples) { it.fuelRateLph })
+        ChartCard("Consumption (L/100km)", "L/100km", series(data.obdSamples) { it.derivedL100 })
+        ChartCard("HV battery power (kW)", "kW", series(data.obdSamples) { it.hvBatteryPowerKw })
 
         if (data.dtcs.isNotEmpty()) {
             ElevatedCard(Modifier.fillMaxWidth()) {
@@ -168,15 +172,25 @@ private fun Stat(label: String, value: String) {
 }
 
 @Composable
-private fun ChartCard(title: String, values: List<Float>) {
-    if (values.size < 2) return
+private fun ChartCard(title: String, unit: String, points: List<ChartPoint>, decimals: Int = 1) {
+    if (points.size < 2) return
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
-            Sparkline(values = values, modifier = Modifier.padding(top = 8.dp))
+            Text(
+                "Pinch to zoom · drag to read values",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TripChart(
+                points = points,
+                unit = unit,
+                valueFormat = { formatNumber(it.toDouble(), decimals) },
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
     }
 }
 
-private fun series(samples: List<ObdSample>, selector: (ObdSample) -> Double?): List<Float> =
-    samples.mapNotNull { selector(it)?.toFloat() }
+private fun series(samples: List<ObdSample>, selector: (ObdSample) -> Double?): List<ChartPoint> =
+    samples.mapNotNull { s -> selector(s)?.let { ChartPoint(s.timestampMillis, it.toFloat()) } }
