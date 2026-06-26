@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,6 +19,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -84,6 +87,25 @@ fun AddEntryScreen(
                     }
                 },
             )
+        },
+        bottomBar = {
+            // Pinned above the keyboard so saving never requires dismissing the
+            // keyboard or scrolling to the bottom of the form.
+            if (vehicle != null) {
+                Surface(tonalElevation = 3.dp) {
+                    Button(
+                        onClick = { vm.save() },
+                        enabled = state.isValid,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .imePadding()
+                            .padding(16.dp),
+                    ) {
+                        Text(if (state.isEditing) "Save changes" else "Add entry")
+                    }
+                }
+            }
         },
     ) { padding ->
         if (vehicle == null) {
@@ -323,14 +345,6 @@ fun AddEntryScreen(
                     label = "Note (optional)",
                     singleLine = false,
                 )
-            }
-
-            Button(
-                onClick = { vm.save() },
-                enabled = state.isValid,
-                modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
-            ) {
-                Text(if (state.isEditing) "Save changes" else "Add entry")
             }
         }
     }
