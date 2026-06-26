@@ -75,10 +75,11 @@ fun TripListScreen(
             )
         },
         floatingActionButton = {
+            val hasActiveTrip = state.trips.any { it.status == TripStatus.RECORDING }
             ExtendedFloatingActionButton(
                 onClick = onRecord,
                 icon = { Icon(Icons.Filled.Sensors, contentDescription = null) },
-                text = { Text("Record") },
+                text = { Text(if (hasActiveTrip) "Live" else "Record") },
             )
         },
     ) { padding ->
