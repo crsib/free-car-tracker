@@ -4,10 +4,18 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,9 +29,14 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ElevatedCard
@@ -32,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -47,6 +61,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -167,6 +183,7 @@ fun LiveTelemetryScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StatusRow(
     state: RecordingState,
@@ -174,15 +191,127 @@ private fun StatusRow(
     obdConnected: Boolean,
     gpsFix: Boolean,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        AssistChip(onClick = {}, label = { Text(state.label()) }, colors = AssistChipDefaults.assistChipColors())
+    // Compact icon pills: state is encoded by icon + colour + animation (a label is kept too, so
+    // the meaning never relies on colour alone). FlowRow lets a pill wrap as a whole unit on narrow
+    // screens instead of squeezing one pill's content.
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val rec = recordingVisual(state)
+        StatusPill(icon = rec.icon, tint = rec.tint, label = rec.label, pulsing = rec.pulsing, spinning = rec.spinning)
+
         if (transport != ObdTransportKind.NONE) {
-            AssistChip(
-                onClick = {},
-                label = { Text(if (obdConnected) "OBD: ${transport.name}" else "OBD: …") },
+            val obdIcon = when (transport) {
+                ObdTransportKind.WIFI -> Icons.Filled.Wifi
+                else -> Icons.Filled.Bluetooth
+            }
+            StatusPill(
+                icon = obdIcon,
+                tint = if (obdConnected) StatusGreen else StatusAmber,
+                label = transport.shortLabel(),
+                pulsing = !obdConnected,
             )
         }
-        AssistChip(onClick = {}, label = { Text(if (gpsFix) "GPS ✓" else "GPS …") })
+
+        StatusPill(
+            icon = if (gpsFix) Icons.Filled.LocationOn else Icons.Filled.LocationSearching,
+            tint = if (gpsFix) StatusGreen else StatusAmber,
+            label = "GPS",
+            pulsing = !gpsFix,
+        )
+    }
+}
+
+/** Status-semantic colours (Material3 has no built-in success/warning role). */
+private val StatusGreen = Color(0xFF4CAF50)
+private val StatusAmber = Color(0xFFFFB300)
+private val StatusRed = Color(0xFFE53935)
+
+private data class RecordingVisual(
+    val icon: ImageVector,
+    val tint: Color,
+    val label: String,
+    val pulsing: Boolean = false,
+    val spinning: Boolean = false,
+)
+
+@Composable
+private fun recordingVisual(state: RecordingState): RecordingVisual = when (state) {
+    RecordingState.IDLE ->
+        RecordingVisual(Icons.Filled.FiberManualRecord, MaterialTheme.colorScheme.onSurfaceVariant, "Idle")
+    RecordingState.CONNECTING ->
+        RecordingVisual(Icons.Filled.Autorenew, StatusAmber, "Connecting", spinning = true)
+    RecordingState.RECORDING ->
+        RecordingVisual(Icons.Filled.FiberManualRecord, StatusRed, "REC", pulsing = true)
+    RecordingState.RECONNECTING ->
+        RecordingVisual(Icons.Filled.Autorenew, StatusAmber, "Reconnecting", spinning = true)
+    RecordingState.ERROR ->
+        RecordingVisual(Icons.Filled.ErrorOutline, MaterialTheme.colorScheme.error, "Error")
+}
+
+private fun ObdTransportKind.shortLabel(): String = when (this) {
+    ObdTransportKind.BT_CLASSIC -> "BT"
+    ObdTransportKind.BLE -> "BLE"
+    ObdTransportKind.WIFI -> "Wi-Fi"
+    ObdTransportKind.NONE -> "OBD"
+}
+
+/**
+ * A small rounded status indicator: a colour-tinted icon plus a one-line label. [pulsing] fades
+ * the icon in and out (live/searching states); [spinning] rotates it (connecting). The label never
+ * wraps so the pill sizes to one line.
+ */
+@Composable
+private fun StatusPill(
+    icon: ImageVector,
+    tint: Color,
+    label: String,
+    pulsing: Boolean = false,
+    spinning: Boolean = false,
+) {
+    // Run both animations unconditionally (Compose requires stable hook calls) and apply each only
+    // when its flag is set, so a pill switching state — e.g. IDLE → RECORDING — stays valid.
+    val transition = rememberInfiniteTransition(label = "statusPill")
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+        label = "pulse",
+    )
+    val spinDeg by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing)),
+        label = "spin",
+    )
+    val alpha = if (pulsing) pulseAlpha else 1f
+    val rotation = if (spinning) spinDeg else 0f
+
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = tint,
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { this.alpha = alpha; rotationZ = rotation },
+            )
+            Text(
+                text = label,
+                maxLines = 1,
+                softWrap = false,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
     }
 }
 
@@ -288,14 +417,6 @@ private fun buildTiles(live: me.crsib.freecartracker.telemetry.service.LiveTelem
 
 private fun Double?.pct(): String = this?.let { "${formatNumber(it)} %" } ?: "—"
 private fun Double?.temp(): String = this?.let { "${formatNumber(it)} °C" } ?: "—"
-
-private fun RecordingState.label(): String = when (this) {
-    RecordingState.IDLE -> "Idle"
-    RecordingState.CONNECTING -> "Connecting…"
-    RecordingState.RECORDING -> "Recording"
-    RecordingState.RECONNECTING -> "Reconnecting…"
-    RecordingState.ERROR -> "Error"
-}
 
 private fun requiredPermissions(context: android.content.Context): Array<String> {
     val config = (context.applicationContext as me.crsib.freecartracker.CarTrackerApp)
