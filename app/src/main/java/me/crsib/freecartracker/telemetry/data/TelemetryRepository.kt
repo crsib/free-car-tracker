@@ -10,6 +10,7 @@ import me.crsib.freecartracker.telemetry.data.dao.GpsPointDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdExtendedSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.TripDao
+import me.crsib.freecartracker.telemetry.data.dao.TripFuelSpan
 import me.crsib.freecartracker.telemetry.data.entity.DeletedTrip
 import me.crsib.freecartracker.telemetry.data.entity.DtcRecord
 import me.crsib.freecartracker.telemetry.data.entity.GpsPoint
@@ -66,6 +67,10 @@ class TelemetryRepository(
     /** Final odometer (km) keyed by trip id, for trips of this vehicle that reported the PID. */
     suspend fun finalOdometerByTrip(vehicleId: Long): Map<Long, Double> =
         obdSampleDao.finalOdometerByVehicle(vehicleId).associate { it.tripId to it.odometerKm }
+
+    /** First/last fuel-tank level (%) keyed by trip id, for estimating fuel usage from the tank drop. */
+    suspend fun fuelSpansByTrip(vehicleId: Long): Map<Long, TripFuelSpan> =
+        obdSampleDao.fuelSpansByVehicle(vehicleId).associateBy { it.tripId }
     suspend fun startTrip(trip: Trip): Long = tripDao.insert(trip)
     suspend fun updateTrip(trip: Trip) = tripDao.update(trip)
     /**

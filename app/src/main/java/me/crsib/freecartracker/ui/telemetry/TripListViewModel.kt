@@ -23,6 +23,8 @@ data class TripListUiState(
     val trips: List<Trip> = emptyList(),
     /** Final odometer (km) per trip id, for trips whose telemetry reported the odometer. */
     val odometerByTrip: Map<Long, Double> = emptyMap(),
+    /** Average fuel usage (L/100km) per trip id: the aggregate, or a tank-drop estimate. */
+    val avgFuelUsageByTrip: Map<Long, Double> = emptyMap(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -38,11 +40,20 @@ class TripListViewModel(
                     flowOf(TripListUiState(loading = false))
                 } else {
                     telemetryRepo.observeTrips(vehicle.id).map { trips ->
+                        val spans = telemetryRepo.fuelSpansByTrip(vehicle.id)
+                        val usage = trips.associate { trip ->
+                            val span = spans[trip.id]
+                            trip.id to (
+                                trip.avgConsumptionL100
+                                    ?: tankAvgUsageL100(span?.startPct, span?.endPct, vehicle.tankCapacityL, trip.distanceKm)
+                                )
+                        }.filterValues { it != null }.mapValues { it.value!! }
                         TripListUiState(
                             loading = false,
                             vehicle = vehicle,
                             trips = trips,
                             odometerByTrip = telemetryRepo.finalOdometerByTrip(vehicle.id),
+                            avgFuelUsageByTrip = usage,
                         )
                     }
                 }

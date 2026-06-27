@@ -9,6 +9,9 @@ import me.crsib.freecartracker.telemetry.data.entity.ObdSample
 /** A trip's final odometer reading (km), from the [ObdSampleDao.finalOdometerByVehicle] query. */
 data class TripOdometer(val tripId: Long, val odometerKm: Double)
 
+/** A trip's first/last fuel-tank level (%), from the [ObdSampleDao.fuelSpansByVehicle] query. */
+data class TripFuelSpan(val tripId: Long, val startPct: Double?, val endPct: Double?)
+
 @Dao
 interface ObdSampleDao {
     @Query("SELECT * FROM obd_samples WHERE tripId = :tripId ORDER BY timestampMillis ASC, id ASC")
@@ -44,6 +47,21 @@ interface ObdSampleDao {
             "GROUP BY s.tripId",
     )
     suspend fun finalOdometerByVehicle(vehicleId: Long): List<TripOdometer>
+
+    /**
+     * First and last reported fuel-tank level (%) per trip for a vehicle. Used to estimate fuel
+     * burned (and thus average usage) from the tank drop when the car doesn't report fuel rate.
+     * A side with no fuel reading comes back null.
+     */
+    @Query(
+        "SELECT t.id AS tripId, " +
+            "(SELECT a.fuelLevelPct FROM obd_samples a WHERE a.tripId = t.id AND a.fuelLevelPct IS NOT NULL " +
+            "ORDER BY a.timestampMillis ASC, a.id ASC LIMIT 1) AS startPct, " +
+            "(SELECT b.fuelLevelPct FROM obd_samples b WHERE b.tripId = t.id AND b.fuelLevelPct IS NOT NULL " +
+            "ORDER BY b.timestampMillis DESC, b.id DESC LIMIT 1) AS endPct " +
+            "FROM trips t WHERE t.vehicleId = :vehicleId",
+    )
+    suspend fun fuelSpansByVehicle(vehicleId: Long): List<TripFuelSpan>
 
     @Insert
     suspend fun insertAll(samples: List<ObdSample>)

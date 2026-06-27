@@ -169,6 +169,10 @@ private fun SummaryTable(data: TripData) {
     val tankDelta = tankDeltaLitres(fuelLevel, data.vehicle?.tankCapacityL)
     val fuelUsedL = trip.fuelUsedL ?: tankDelta
     val fuelUsedEstimated = trip.fuelUsedL == null && tankDelta != null
+    // Average fuel usage: the aggregate, else estimated from the tank drop over the distance.
+    val avgUsage = trip.avgConsumptionL100
+        ?: tankAvgUsageL100(fuelLevel?.first, fuelLevel?.second, data.vehicle?.tankCapacityL, trip.distanceKm)
+    val avgUsageEstimated = trip.avgConsumptionL100 == null && avgUsage != null
 
     SummarySection(
         "Distance & time",
@@ -191,7 +195,7 @@ private fun SummaryTable(data: TripData) {
         buildList {
             fuelUsedL?.let { add("Fuel used" to "${formatNumber(it)} L${if (fuelUsedEstimated) " (est.)" else ""}") }
             trip.energyUsedKwh?.let { add("Energy used" to "${formatNumber(it)} kWh") }
-            trip.avgConsumptionL100?.let { add("Avg consumption" to "${formatNumber(it)} L/100km") }
+            avgUsage?.let { add("Avg consumption" to "${formatNumber(it)} L/100km${if (avgUsageEstimated) " (est.)" else ""}") }
         },
     )
     SummarySection(

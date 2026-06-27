@@ -113,6 +113,7 @@ fun TripListScreen(
                 TripRow(
                     trip = trip,
                     finalOdometerKm = state.odometerByTrip[trip.id],
+                    avgFuelUsageL100 = state.avgFuelUsageByTrip[trip.id],
                     onClick = { onOpenTrip(trip.id) },
                     onDelete = { vm.deleteTrip(trip.id) },
                 )
@@ -122,7 +123,13 @@ fun TripListScreen(
 }
 
 @Composable
-private fun TripRow(trip: Trip, finalOdometerKm: Double?, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun TripRow(
+    trip: Trip,
+    finalOdometerKm: Double?,
+    avgFuelUsageL100: Double?,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
@@ -132,7 +139,7 @@ private fun TripRow(trip: Trip, finalOdometerKm: Double?, onClick: () -> Unit, o
             Column(Modifier.weight(1f)) {
                 Text(formatDate(trip.startedAtMillis), fontWeight = FontWeight.Medium)
                 Text(
-                    tripSummaryLine(trip),
+                    tripSummaryLine(trip, avgFuelUsageL100),
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 2.dp),
                 )
@@ -169,12 +176,13 @@ private fun TripRow(trip: Trip, finalOdometerKm: Double?, onClick: () -> Unit, o
     }
 }
 
-private fun tripSummaryLine(trip: Trip): String {
+private fun tripSummaryLine(trip: Trip, avgFuelUsageL100: Double?): String {
     val parts = buildList {
         trip.distanceKm?.let { add("${formatNumber(it)} km") }
         trip.durationSec?.let { add(formatDuration(it)) }
         trip.avgSpeedKmh?.let { add("avg ${formatNumber(it)} km/h") }
-        trip.avgConsumptionL100?.let { add("${formatNumber(it)} L/100km") }
+        // The aggregate when present, otherwise a tank-drop estimate (see TripListViewModel).
+        avgFuelUsageL100?.let { add("${formatNumber(it)} L/100km") }
     }
     return if (parts.isEmpty()) "No summary" else parts.joinToString(" · ")
 }
