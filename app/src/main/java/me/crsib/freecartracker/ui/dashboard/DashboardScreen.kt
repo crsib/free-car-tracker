@@ -34,7 +34,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.prefs.AppPreferences
@@ -347,7 +349,25 @@ private fun KpiCard(title: String, value: String, unit: String, modifier: Modifi
     ElevatedCard(modifier = modifier) {
         Column(Modifier.padding(16.dp)) {
             Text(title, style = MaterialTheme.typography.labelMedium)
-            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            // Shrink-to-fit: a long currency value (e.g. "RUB223,659.21") otherwise character-wraps
+            // mid-number on the narrow half-width card. Compose 1.7 has no built-in text autosize,
+            // so step the font down on overflow until it fits one line (floor keeps it legible).
+            val baseSize = MaterialTheme.typography.headlineSmall.fontSize
+            var fontSize by remember(value) { mutableStateOf(baseSize) }
+            Text(
+                value,
+                style = MaterialTheme.typography.headlineSmall,
+                fontSize = fontSize,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                onTextLayout = { result ->
+                    if (result.didOverflowWidth && fontSize.value > 14f) {
+                        fontSize = (fontSize.value * 0.92f).sp
+                    }
+                },
+            )
             if (unit.isNotEmpty()) {
                 Text(unit, style = MaterialTheme.typography.bodySmall)
             }
