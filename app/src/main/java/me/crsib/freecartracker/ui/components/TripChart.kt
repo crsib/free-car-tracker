@@ -95,6 +95,8 @@ fun TripChart(
     unit: String = "",
     lineColor: Color = Color(0xFF1565C0),
     valueFormat: (Float) -> String = { formatNumber(it.toDouble()) },
+    /** Tooltip's secondary line for a point's absolute time. Defaults to elapsed time from the start. */
+    timeLabel: (Long) -> String = { t -> formatDuration((t - domainStartMillis) / 1000) },
 ) {
     if (points.size < 2) return
 
@@ -239,7 +241,7 @@ fun TripChart(
                     drawTooltip(
                         measurer = measurer,
                         valueText = if (unit.isEmpty()) valueFormat(p.value) else "${valueFormat(p.value)} $unit",
-                        timeText = formatDuration((p.timeMillis - domainStartMillis) / 1000),
+                        timeText = timeLabel(p.timeMillis),
                         anchorX = x,
                         bg = tooltipBg,
                         fg = tooltipText,

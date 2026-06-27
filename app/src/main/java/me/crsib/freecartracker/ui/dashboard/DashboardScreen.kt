@@ -43,8 +43,10 @@ import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.Powertrain
-import me.crsib.freecartracker.ui.components.Sparkline
+import me.crsib.freecartracker.ui.components.ChartPoint
+import me.crsib.freecartracker.ui.components.TripChart
 import me.crsib.freecartracker.ui.components.VehicleSwitcher
+import me.crsib.freecartracker.ui.components.rememberChartSync
 import me.crsib.freecartracker.ui.containerViewModel
 import me.crsib.freecartracker.ui.util.costBucketLabel
 import me.crsib.freecartracker.ui.util.formatDate
@@ -156,18 +158,33 @@ fun DashboardScreen(
                 PeriodStatsCard(state = state, vehicle = vehicle)
             }
 
-            if (state.trend.size >= 2) {
+            val trendPoints = state.trend
+                .mapNotNull { tp ->
+                    UnitConversions.fuelEconomyToDisplay(tp.litresPer100Km, system)
+                        ?.let { ChartPoint(tp.dateMillis, it.toFloat()) }
+                }
+                .sortedBy { it.timeMillis }
+            if (trendPoints.size >= 2) {
                 item {
+                    val trendSync = rememberChartSync(trendPoints)
                     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
                             Text(
                                 "Consumption trend (${UnitConversions.fuelEconomyUnit(system)})",
                                 style = MaterialTheme.typography.labelLarge,
                             )
-                            Sparkline(
-                                values = state.trend.map {
-                                    (UnitConversions.fuelEconomyToDisplay(it.litresPer100Km, system) ?: 0.0).toFloat()
-                                },
+                            Text(
+                                "Pinch to zoom · drag to read values",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TripChart(
+                                points = trendPoints,
+                                sync = trendSync,
+                                domainStartMillis = trendPoints.first().timeMillis,
+                                domainEndMillis = trendPoints.last().timeMillis,
+                                unit = UnitConversions.fuelEconomyUnit(system),
+                                timeLabel = { formatDate(it) },
                                 modifier = Modifier.padding(top = 12.dp),
                             )
                         }
