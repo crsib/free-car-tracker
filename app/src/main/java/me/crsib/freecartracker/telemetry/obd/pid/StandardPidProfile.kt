@@ -167,7 +167,21 @@ object StandardPidProfile : PidProfile {
         PidDefinition("odometerKm", OdometerCommand(), "km", MetricGroup.CORE, PollPriority.SLOW, Storage.Wide("odometerKm"), skipDiscoveryGate = true),
         // Hybrid/EV standard PIDs (SLOW). 0x9A (HV V/A) is also above the discovered ranges.
         PidDefinition("hybridBatteryLifePct", HybridBatteryRemainingCommand(), "%", MetricGroup.EV_HYBRID, PollPriority.SLOW, Storage.Wide("hybridBatteryLifePct")),
-        PidDefinition("hvBatteryVoltage", HvBatteryVoltageCommand(), "V", MetricGroup.EV_HYBRID, PollPriority.SLOW, Storage.Wide("hvBatteryVoltage"), skipDiscoveryGate = true),
-        PidDefinition("hvBatteryCurrent", HvBatteryCurrentCommand(), "A", MetricGroup.EV_HYBRID, PollPriority.SLOW, Storage.Wide("hvBatteryCurrent"), skipDiscoveryGate = true),
+        // 0x9A carries voltage AND current in one frame, so we read it once and decode current as a
+        // companion. This time-aligns the two (power = V×I is from one instant) and avoids spending
+        // two round-robin slots on the same PID. FAST so HV power tracks the throttle in real time
+        // (one extra read per cycle, since current rides along for free as a companion).
+        PidDefinition(
+            "hvBatteryVoltage", HvBatteryVoltageCommand(), "V", MetricGroup.EV_HYBRID, PollPriority.FAST,
+            Storage.Wide("hvBatteryVoltage"), skipDiscoveryGate = true,
+            companions = listOf(
+                CompanionMetric("hvBatteryCurrent", "A", Storage.Wide("hvBatteryCurrent")) { raw ->
+                    HV_CURRENT_DECODER.handler(raw).toDoubleOrNull()
+                },
+            ),
+        ),
     )
+
+    /** Reused to decode the current half of the shared 0x9A response (see [HvBatteryCurrentCommand]). */
+    private val HV_CURRENT_DECODER = HvBatteryCurrentCommand()
 }

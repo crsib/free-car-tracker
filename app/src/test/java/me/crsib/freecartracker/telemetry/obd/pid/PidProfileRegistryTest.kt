@@ -1,5 +1,6 @@
 package me.crsib.freecartracker.telemetry.obd.pid
 
+import com.github.eltonvs.obd.command.ObdRawResponse
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.domain.model.Powertrain
 import org.junit.Assert.assertEquals
@@ -55,12 +56,24 @@ class PidProfileRegistryTest {
     @Test
     fun baselineIncludesHvPackOdometerAndTimingPids() {
         val byKey = StandardPidProfile.pids.associateBy { it.key }
-        assertTrue(byKey.keys.containsAll(setOf("hvBatteryVoltage", "hvBatteryCurrent", "odometerKm", "timingAdvanceDeg")))
+        assertTrue(byKey.keys.containsAll(setOf("hvBatteryVoltage", "odometerKm", "timingAdvanceDeg")))
         // The high-range PIDs (0x9A, 0xA6) must bypass the supported-PID discovery gate.
         assertTrue(byKey.getValue("hvBatteryVoltage").skipDiscoveryGate)
-        assertTrue(byKey.getValue("hvBatteryCurrent").skipDiscoveryGate)
         assertTrue(byKey.getValue("odometerKm").skipDiscoveryGate)
         // Timing advance (0x0E) is in a discovered range, so it stays gated.
         assertEquals(false, byKey.getValue("timingAdvanceDeg").skipDiscoveryGate)
+    }
+
+    @Test
+    fun hvCurrentIsACompanionOfVoltageSharingTheOneFrame() {
+        // Voltage and current both live in PID 0x9A; current rides along as a companion so the
+        // pack frame is read once and the two values stay time-aligned (power = V×I).
+        val voltage = StandardPidProfile.pids.first { it.key == "hvBatteryVoltage" }
+        assertTrue(StandardPidProfile.pids.none { it.key == "hvBatteryCurrent" })
+        val current = voltage.companions.single()
+        assertEquals("hvBatteryCurrent", current.key)
+        // 41 9A 07 00 5D 73 00 19 -> current bytes 00 19 = 25 / 10 = 2.5 A
+        val decoded = current.decode(ObdRawResponse(value = "41 9A 07 00 5D 73 00 19", elapsedTime = 0L))
+        assertEquals(2.5, decoded!!, 1e-6)
     }
 }

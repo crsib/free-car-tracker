@@ -284,6 +284,10 @@ class TripRecorder(
         val hvV = wide["hvBatteryVoltage"]
         val hvA = wide["hvBatteryCurrent"]
         _liveState.update { state ->
+            // Recompute power from the latest known voltage and current, not just this batch — so a
+            // refreshed current (or voltage) updates power even if the other half is unchanged.
+            val newHvV = hvV ?: state.hvBatteryVoltage
+            val newHvA = hvA ?: state.hvBatteryCurrent
             state.copy(
                 speedKmh = wide["speedKmh"] ?: state.speedKmh,
                 rpm = wide["rpm"] ?: state.rpm,
@@ -293,9 +297,9 @@ class TripRecorder(
                 controlModuleVoltage = wide["controlModuleVoltage"] ?: state.controlModuleVoltage,
                 fuelLevelPct = wide["fuelLevelPct"] ?: state.fuelLevelPct,
                 hybridBatteryLifePct = wide["hybridBatteryLifePct"] ?: state.hybridBatteryLifePct,
-                hvBatteryVoltage = hvV ?: state.hvBatteryVoltage,
-                hvBatteryCurrent = hvA ?: state.hvBatteryCurrent,
-                hvBatteryPowerKw = if (hvV != null && hvA != null) hvV * hvA / 1000.0 else state.hvBatteryPowerKw,
+                hvBatteryVoltage = newHvV,
+                hvBatteryCurrent = newHvA,
+                hvBatteryPowerKw = if (newHvV != null && newHvA != null) newHvV * newHvA / 1000.0 else state.hvBatteryPowerKw,
                 odometerKm = wide["odometerKm"] ?: state.odometerKm,
                 obdConnected = true,
                 extended = if (extended.isEmpty()) {

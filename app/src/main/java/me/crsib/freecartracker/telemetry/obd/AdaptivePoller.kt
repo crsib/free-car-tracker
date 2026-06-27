@@ -97,12 +97,12 @@ class AdaptivePoller(
             }
             val out = ArrayList<ObdReading>(batch.size)
             for (def in batch) {
-                val reading = session.query(def)
-                if (reading == null) {
+                val readings = session.query(def)
+                if (readings.isEmpty()) {
                     schedule.recordFailure(def.key)
                 } else {
                     schedule.recordSuccess(def.key)
-                    out += reading
+                    out += readings
                 }
             }
             // A run of fully-empty cycles means the transport dropped (every query throws and is

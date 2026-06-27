@@ -20,20 +20,27 @@ class ObdSession(
 
     suspend fun initialize() = initializer.initialize(connection)
 
-    /** Query one PID. Returns null when the ECU has no data or the value isn't numeric. */
-    suspend fun query(def: PidDefinition): ObdReading? = try {
+    /**
+     * Query one PID. Returns the primary reading plus any [PidDefinition.companions] decoded from
+     * the same response (e.g. HV voltage + current from PID 0x9A) — so multi-value frames are read
+     * once and stay time-aligned. Empty when the ECU has no data or no value parsed.
+     */
+    suspend fun query(def: PidDefinition): List<ObdReading> = try {
         val resp = connection.run(def.command, maxRetries = MAX_RETRIES)
-        val value = resp.value.toDoubleOrNull() ?: return null
-        ObdReading(
-            key = def.key,
-            value = value,
-            unit = def.unit.ifEmpty { resp.unit },
-            storage = def.storage,
-        )
+        buildList {
+            resp.value.toDoubleOrNull()?.let { value ->
+                add(ObdReading(def.key, value, def.unit.ifEmpty { resp.unit }, def.storage))
+            }
+            for (companion in def.companions) {
+                companion.decode(resp.rawResponse)?.let { value ->
+                    add(ObdReading(companion.key, value, companion.unit, companion.storage))
+                }
+            }
+        }
     } catch (c: CancellationException) {
         throw c
     } catch (_: Exception) {
-        null
+        emptyList()
     }
 
     /**

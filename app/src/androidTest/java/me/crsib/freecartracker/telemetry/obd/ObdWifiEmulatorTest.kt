@@ -33,9 +33,9 @@ class ObdWifiEmulatorTest {
             val session = ObdSession(transport)
             session.initialize()
 
-            val rpm = session.query(StandardPidProfile.pids.first { it.key == "rpm" })
-            val speed = session.query(StandardPidProfile.pids.first { it.key == "speedKmh" })
-            val coolant = session.query(StandardPidProfile.pids.first { it.key == "coolantTempC" })
+            val rpm = session.query(StandardPidProfile.pids.first { it.key == "rpm" }).firstOrNull()
+            val speed = session.query(StandardPidProfile.pids.first { it.key == "speedKmh" }).firstOrNull()
+            val coolant = session.query(StandardPidProfile.pids.first { it.key == "coolantTempC" }).firstOrNull()
 
             assertNotNull("RPM should decode", rpm)
             assertNotNull("Speed should decode", speed)

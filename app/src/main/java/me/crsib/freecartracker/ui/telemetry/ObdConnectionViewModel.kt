@@ -258,7 +258,7 @@ class ObdConnectionViewModel(
             val session = ObdSession(transport)
             session.initialize()
             val supported = runCatching { session.discoverSupportedPids() }.getOrDefault(emptySet())
-            val rpm = session.query(StandardPidProfile.pids.first { it.key == "rpm" })
+            val rpm = session.query(StandardPidProfile.pids.first { it.key == "rpm" }).firstOrNull()
             val rpmText = rpm?.value?.toInt()?.toString() ?: "n/a"
             "Connected. Supported PIDs: ${supported.size}. RPM: $rpmText. " +
                 "Location: ${locationFactory.create().name}."
