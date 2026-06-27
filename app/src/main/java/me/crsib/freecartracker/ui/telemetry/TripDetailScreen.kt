@@ -163,6 +163,7 @@ private fun SummaryTable(data: TripData) {
 
     val fuelLevel = firstLast(data.obdSamples) { it.fuelLevelPct }
     val batteryLevel = batteryStartEnd(data)
+    val odometer = firstLast(data.obdSamples) { it.odometerKm }
     // Prefer the fuel-rate integral; fall back to tank-level drop × capacity so the figure shows
     // even on cars (like most EVs/REVs) that don't report fuel rate.
     val tankDelta = tankDeltaLitres(fuelLevel, data.vehicle?.tankCapacityL)
@@ -173,6 +174,7 @@ private fun SummaryTable(data: TripData) {
         "Distance & time",
         buildList {
             trip.distanceKm?.let { add("Distance" to "${formatNumber(it)} km") }
+            odometer?.let { add("Odometer" to odometerRange(it)) }
             trip.durationSec?.let { add("Duration" to formatDuration(it)) }
             trip.movingSec?.let { add("Moving" to formatDuration(it)) }
         },
@@ -290,3 +292,6 @@ private fun tankDeltaLitres(level: Pair<Double, Double>?, capacityL: Double?): D
 
 private fun levelRange(level: Pair<Double, Double>): String =
     "${formatNumber(level.first)}% → ${formatNumber(level.second)}%"
+
+private fun odometerRange(range: Pair<Double, Double>): String =
+    "${formatNumber(range.first, 0)} → ${formatNumber(range.second, 0)} km"
