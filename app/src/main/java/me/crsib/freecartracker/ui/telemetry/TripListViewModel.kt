@@ -21,6 +21,8 @@ data class TripListUiState(
     val vehicle: Vehicle? = null,
     val vehicles: List<Vehicle> = emptyList(),
     val trips: List<Trip> = emptyList(),
+    /** Final odometer (km) per trip id, for trips whose telemetry reported the odometer. */
+    val odometerByTrip: Map<Long, Double> = emptyMap(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -36,7 +38,12 @@ class TripListViewModel(
                     flowOf(TripListUiState(loading = false))
                 } else {
                     telemetryRepo.observeTrips(vehicle.id).map { trips ->
-                        TripListUiState(loading = false, vehicle = vehicle, trips = trips)
+                        TripListUiState(
+                            loading = false,
+                            vehicle = vehicle,
+                            trips = trips,
+                            odometerByTrip = telemetryRepo.finalOdometerByTrip(vehicle.id),
+                        )
                     }
                 }
             }

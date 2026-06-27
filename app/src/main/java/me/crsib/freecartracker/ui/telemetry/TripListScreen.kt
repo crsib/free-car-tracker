@@ -110,14 +110,19 @@ fun TripListScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(state.trips, key = { it.id }) { trip ->
-                TripRow(trip = trip, onClick = { onOpenTrip(trip.id) }, onDelete = { vm.deleteTrip(trip.id) })
+                TripRow(
+                    trip = trip,
+                    finalOdometerKm = state.odometerByTrip[trip.id],
+                    onClick = { onOpenTrip(trip.id) },
+                    onDelete = { vm.deleteTrip(trip.id) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun TripRow(trip: Trip, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun TripRow(trip: Trip, finalOdometerKm: Double?, onClick: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
@@ -131,6 +136,14 @@ private fun TripRow(trip: Trip, onClick: () -> Unit, onDelete: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 2.dp),
                 )
+                finalOdometerKm?.let {
+                    Text(
+                        "Odometer ${formatNumber(it, 0)} km",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 if (trip.status == TripStatus.ABORTED) {
                     Text(
                         "Ended unexpectedly",

@@ -62,6 +62,10 @@ class TelemetryRepository(
 
     /** Most recent odometer reading (km) from this vehicle's trips, or null if none reported it. */
     suspend fun latestOdometerKm(vehicleId: Long): Double? = obdSampleDao.latestOdometerForVehicle(vehicleId)
+
+    /** Final odometer (km) keyed by trip id, for trips of this vehicle that reported the PID. */
+    suspend fun finalOdometerByTrip(vehicleId: Long): Map<Long, Double> =
+        obdSampleDao.finalOdometerByVehicle(vehicleId).associate { it.tripId to it.odometerKm }
     suspend fun startTrip(trip: Trip): Long = tripDao.insert(trip)
     suspend fun updateTrip(trip: Trip) = tripDao.update(trip)
     /**

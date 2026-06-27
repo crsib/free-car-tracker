@@ -6,6 +6,9 @@ import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import me.crsib.freecartracker.telemetry.data.entity.ObdSample
 
+/** A trip's final odometer reading (km), from the [ObdSampleDao.finalOdometerByVehicle] query. */
+data class TripOdometer(val tripId: Long, val odometerKm: Double)
+
 @Dao
 interface ObdSampleDao {
     @Query("SELECT * FROM obd_samples WHERE tripId = :tripId ORDER BY timestampMillis ASC, id ASC")
@@ -29,6 +32,18 @@ interface ObdSampleDao {
             "ORDER BY s.timestampMillis DESC LIMIT 1",
     )
     suspend fun latestOdometerForVehicle(vehicleId: Long): Double?
+
+    /**
+     * Final odometer (km) per trip for a vehicle. Odometer (PID 0xA6) only increases, so MAX over a
+     * trip's samples is its end reading. Trips that never reported it are absent from the result.
+     */
+    @Query(
+        "SELECT s.tripId AS tripId, MAX(s.odometerKm) AS odometerKm FROM obd_samples s " +
+            "JOIN trips t ON s.tripId = t.id " +
+            "WHERE t.vehicleId = :vehicleId AND s.odometerKm IS NOT NULL " +
+            "GROUP BY s.tripId",
+    )
+    suspend fun finalOdometerByVehicle(vehicleId: Long): List<TripOdometer>
 
     @Insert
     suspend fun insertAll(samples: List<ObdSample>)
