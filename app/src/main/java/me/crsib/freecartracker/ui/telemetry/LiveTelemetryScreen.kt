@@ -6,7 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -35,14 +36,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -181,11 +187,11 @@ private fun StatusRow(
 }
 
 @Composable
-private fun Gauge(label: String, value: Double?, max: Double, unit: String, modifier: Modifier = Modifier) {
+internal fun Gauge(label: String, value: Double?, max: Double, unit: String, modifier: Modifier = Modifier) {
     val arcColor = MaterialTheme.colorScheme.primary
     val trackColor = MaterialTheme.colorScheme.surfaceVariant
     ElevatedCard(modifier) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier.fillMaxWidth().aspectRatio(1.3f).padding(12.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -200,8 +206,13 @@ private fun Gauge(label: String, value: Double?, max: Double, unit: String, modi
                 drawArc(trackColor, startAngle, sweepTotal, false, topLeft, arcSize, style = stroke)
                 drawArc(arcColor, startAngle, sweepTotal * fraction, false, topLeft, arcSize, style = stroke)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
+            // Keep the readout inside the arc: the gauge height is the limiting
+            // dimension, and text must fit the circle inscribed in it (~0.6×).
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.widthIn(max = maxHeight * 0.6f),
+            ) {
+                AutoSizeText(
                     value?.let { formatNumber(it) } ?: "—",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
@@ -211,6 +222,36 @@ private fun Gauge(label: String, value: Double?, max: Double, unit: String, modi
             }
         }
     }
+}
+
+/**
+ * Single-line text that shrinks its font until it fits the available width.
+ * Replaces Compose 1.8's [autoSize], which the current BOM predates.
+ */
+@Composable
+private fun AutoSizeText(
+    text: String,
+    style: TextStyle,
+    fontWeight: FontWeight,
+    modifier: Modifier = Modifier,
+) {
+    var scaledStyle by remember(text, style) { mutableStateOf(style) }
+    var readyToDraw by remember(text, style) { mutableStateOf(false) }
+    Text(
+        text,
+        modifier = modifier.drawWithContent { if (readyToDraw) drawContent() },
+        style = scaledStyle,
+        fontWeight = fontWeight,
+        maxLines = 1,
+        softWrap = false,
+        onTextLayout = { result ->
+            if (result.didOverflowWidth) {
+                scaledStyle = scaledStyle.copy(fontSize = scaledStyle.fontSize * 0.9f)
+            } else {
+                readyToDraw = true
+            }
+        },
+    )
 }
 
 private data class Tile(val label: String, val value: String)
