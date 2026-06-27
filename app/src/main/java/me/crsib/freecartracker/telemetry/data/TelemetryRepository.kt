@@ -2,6 +2,7 @@ package me.crsib.freecartracker.telemetry.data
 
 import kotlinx.coroutines.flow.Flow
 import me.crsib.freecartracker.data.dao.VehicleDao
+import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.domain.model.TripStatus
 import me.crsib.freecartracker.telemetry.data.dao.DeletedTripDao
 import me.crsib.freecartracker.telemetry.data.dao.DtcDao
@@ -23,6 +24,8 @@ data class TripData(
     val obdSamples: List<ObdSample>,
     val extendedSamples: List<ObdExtendedSample>,
     val dtcs: List<DtcRecord>,
+    /** The trip's vehicle, for capacities/units in the summary. Null if it can't be loaded. */
+    val vehicle: Vehicle? = null,
 )
 
 /** Aggregates computed by the TripAggregator and written on stop. */
@@ -122,6 +125,7 @@ class TelemetryRepository(
             obdSamples = obdSampleDao.getForTrip(id),
             extendedSamples = extendedDao.getForTrip(id),
             dtcs = dtcDao.getForTrip(id),
+            vehicle = vehicleDao?.getById(trip.vehicleId),
         )
     }
 }
