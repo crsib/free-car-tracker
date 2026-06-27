@@ -62,7 +62,7 @@ fun AddEntryScreen(
     onDone: () -> Unit,
 ) {
     val vm = containerViewModel(key = "entry-$vehicleId-${editKind ?: "new"}-${editId ?: 0}") { c ->
-        EntryEditViewModel(c.vehicleRepository, c.entryRepository, vehicleId, editKind, editId)
+        EntryEditViewModel(c.vehicleRepository, c.entryRepository, c.telemetryRepository, vehicleId, editKind, editId)
     }
     val state by vm.state.collectAsStateWithLifecycle()
 

@@ -17,6 +17,19 @@ interface ObdSampleDao {
     @Query("SELECT COUNT(*) FROM obd_samples WHERE tripId = :tripId")
     suspend fun countForTrip(tripId: Long): Int
 
+    /**
+     * The most recent odometer reading (canonical km) across all of a vehicle's trips — from the
+     * in-progress trip if one is recording, otherwise the last completed trip. Null when no trip
+     * ever reported the odometer PID (0xA6).
+     */
+    @Query(
+        "SELECT s.odometerKm FROM obd_samples s " +
+            "JOIN trips t ON s.tripId = t.id " +
+            "WHERE t.vehicleId = :vehicleId AND s.odometerKm IS NOT NULL " +
+            "ORDER BY s.timestampMillis DESC LIMIT 1",
+    )
+    suspend fun latestOdometerForVehicle(vehicleId: Long): Double?
+
     @Insert
     suspend fun insertAll(samples: List<ObdSample>)
 }

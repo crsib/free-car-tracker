@@ -59,6 +59,9 @@ class TelemetryRepository(
     fun observeTrips(vehicleId: Long): Flow<List<Trip>> = tripDao.observeForVehicle(vehicleId)
     fun observeTrip(id: Long): Flow<Trip?> = tripDao.observe(id)
     suspend fun getTrip(id: Long): Trip? = tripDao.getById(id)
+
+    /** Most recent odometer reading (km) from this vehicle's trips, or null if none reported it. */
+    suspend fun latestOdometerKm(vehicleId: Long): Double? = obdSampleDao.latestOdometerForVehicle(vehicleId)
     suspend fun startTrip(trip: Trip): Long = tripDao.insert(trip)
     suspend fun updateTrip(trip: Trip) = tripDao.update(trip)
     /**

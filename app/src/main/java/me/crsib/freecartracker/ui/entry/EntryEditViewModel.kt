@@ -13,6 +13,7 @@ import me.crsib.freecartracker.data.entity.FuelEntry
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.repository.EntryRepository
 import me.crsib.freecartracker.data.repository.VehicleRepository
+import me.crsib.freecartracker.telemetry.data.TelemetryRepository
 import me.crsib.freecartracker.domain.Money
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.ChargeType
@@ -83,6 +84,7 @@ data class EntryFormState(
 class EntryEditViewModel(
     private val vehicleRepo: VehicleRepository,
     private val entryRepo: EntryRepository,
+    private val telemetryRepo: TelemetryRepository,
     private val vehicleId: Long,
     private val editKind: EntryKind?,
     private val editId: Long?,
@@ -112,6 +114,17 @@ class EntryEditViewModel(
             lastOdometerKm = entryRepo.lastOdometerKm(vehicleId),
             loaded = true,
         )
+
+        // Adding a new entry: prefill the odometer from the latest trip reading (the in-progress
+        // trip if recording, else the last one). Only when it's at least the highest reading already
+        // on record, so we never suggest a value that has gone backwards.
+        if (editId == null) {
+            val tripOdoKm = telemetryRepo.latestOdometerKm(vehicleId)
+            val lastKm = s.lastOdometerKm
+            if (tripOdoKm != null && tripOdoKm > 0.0 && (lastKm == null || tripOdoKm >= lastKm)) {
+                s = s.copy(odometer = num(UnitConversions.kmToDisplay(tripOdoKm, system)))
+            }
+        }
 
         // Adding a new fuel/charge entry: prefill the price per unit from the last entry. The user
         // then enters volume/energy (or total) and the linked fields derive the rest.
