@@ -17,13 +17,15 @@ import me.crsib.freecartracker.telemetry.data.TelemetryRepository
 data class SyncReport(
     val ledgersPushed: Int = 0,
     val tripsUploaded: Int = 0,
+    val tripsDeleted: Int = 0,
     val vehiclesPulled: Int = 0,
     val ledgersPulled: Int = 0,
     val tripsImported: Int = 0,
+    val tripsRemoved: Int = 0,
 ) {
     fun summary(): String =
-        "↑ $ledgersPushed ledgers, $tripsUploaded trips · ↓ $vehiclesPulled cars, " +
-            "$ledgersPulled ledgers, $tripsImported trips"
+        "↑ $ledgersPushed ledgers, $tripsUploaded trips, $tripsDeleted del · ↓ $vehiclesPulled cars, " +
+            "$ledgersPulled ledgers, $tripsImported trips, $tripsRemoved del"
 }
 
 /**
@@ -126,6 +128,32 @@ class WebDavSyncManager(
                 report = report.copy(tripsUploaded = report.tripsUploaded + 1)
             }
         }
+
+        report = pushTombstones(config, report)
+        return report
+    }
+
+    /**
+     * For every locally-deleted synced trip not yet purged: drop a tombstone marker (so other
+     * devices delete their copy) then remove the remote trip folder, and mark it purged. The
+     * marker is written before the folder delete so a crash mid-purge still propagates the intent.
+     */
+    private suspend fun pushTombstones(config: WebDavConfig, start: SyncReport): SyncReport {
+        var report = start
+        for (tomb in db.deletedTripDao().getUnpurged()) {
+            client.ensureCollection(config, WebDavPaths.tombstonesDir(tomb.vehicleSyncId)).getOrThrow()
+            client.putBytes(
+                config,
+                WebDavPaths.tombstoneFile(tomb.vehicleSyncId, tomb.tripSyncId),
+                ByteArray(0),
+            ).getOrThrow()
+            client.delete(
+                config,
+                WebDavPaths.tripDir(tomb.vehicleSyncId, tomb.startedAtMillis, tomb.tripSyncId),
+            ).getOrThrow()
+            db.deletedTripDao().markPurged(tomb.tripSyncId)
+            report = report.copy(tripsDeleted = report.tripsDeleted + 1)
+        }
         return report
     }
 
@@ -203,7 +231,37 @@ class WebDavSyncManager(
                 report = report.copy(ledgersPulled = report.ledgersPulled + 1)
             }
 
+            report = applyRemoteTombstones(config, vSync, now, report)
             report = importNewTrips(config, vSync, now, report)
+        }
+        return report
+    }
+
+    /**
+     * Honor tombstone markers another device left under `{vSync}/tombstones/`: delete the matching
+     * local trip if we still have it, and record a local tombstone (already purged) so [importNewTrips]
+     * skips it even if the remote folder hasn't been removed yet.
+     */
+    private suspend fun applyRemoteTombstones(config: WebDavConfig, vSync: String, now: Long, start: SyncReport): SyncReport {
+        var report = start
+        val markers = client.list(config, WebDavPaths.tombstonesDir(vSync)).getOrThrow().filter { !it.isCollection }
+        for (marker in markers) {
+            val tripSyncId = marker.name
+            if (db.deletedTripDao().isTombstoned(tripSyncId)) continue
+            val local = db.tripDao().findBySyncId(tripSyncId)
+            if (local != null) {
+                db.tripDao().deleteById(local.id)
+                report = report.copy(tripsRemoved = report.tripsRemoved + 1)
+            }
+            db.deletedTripDao().upsert(
+                me.crsib.freecartracker.telemetry.data.entity.DeletedTrip(
+                    tripSyncId = tripSyncId,
+                    vehicleSyncId = vSync,
+                    startedAtMillis = local?.startedAtMillis ?: 0L,
+                    deletedAtMillis = now,
+                    remotePurged = true,
+                ),
+            )
         }
         return report
     }
@@ -218,6 +276,7 @@ class WebDavSyncManager(
                 val tripDirs = client.list(config, "${WebDavPaths.tripsRoot(vSync)}${y.name}/${m.name}/").getOrThrow().filter { it.isCollection }
                 for (t in tripDirs) {
                     if (db.tripDao().findBySyncId(t.name) != null) continue
+                    if (db.deletedTripDao().isTombstoned(t.name)) continue
                     val base = "${WebDavPaths.tripsRoot(vSync)}${y.name}/${m.name}/${t.name}/"
                     val manifest = getJson(config, base + WebDavPaths.TRIP_JSON, TripManifest.serializer()) ?: continue
                     val obd = manifest.files.obdCsvGz?.let { client.getGunzip(config, base + it).getOrThrow() }

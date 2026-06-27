@@ -20,6 +20,7 @@ import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -66,14 +67,17 @@ class WebDavSyncE2ETest {
     private fun newDb() = Room.inMemoryDatabaseBuilder(ctx, AppDatabase::class.java)
         .allowMainThreadQueries().build()
 
+    private fun repo(db: AppDatabase) = TelemetryRepository(
+        db.tripDao(), db.gpsPointDao(), db.obdSampleDao(), db.obdExtendedSampleDao(), db.dtcDao(),
+        vehicleDao = db.vehicleDao(), deletedTripDao = db.deletedTripDao(),
+    )
+
     private fun manager(db: AppDatabase, statePrefs: String) = WebDavSyncManager(
         store = settings,
         syncState = SyncStateStore(ctx, statePrefs),
         client = WebDavClient(),
         db = db,
-        telemetryRepo = TelemetryRepository(
-            db.tripDao(), db.gpsPointDao(), db.obdSampleDao(), db.obdExtendedSampleDao(), db.dtcDao(),
-        ),
+        telemetryRepo = repo(db),
     )
 
     @Test
@@ -144,6 +148,54 @@ class WebDavSyncE2ETest {
             assertEquals(1, pull2.ledgersPulled)
             assertEquals(2, deviceB.fuelEntryDao().getForVehicle(vB.id).size)
             assertTrue(pull2.tripsImported == 0)
+        } finally {
+            deviceA.close()
+            deviceB.close()
+        }
+    }
+
+    @Test
+    fun deletingSyncedTrip_purgesRemote_andPropagatesToOtherDevice() = runBlocking {
+        val deviceA = newDb()
+        val deviceB = newDb()
+        try {
+            val mgrA = manager(deviceA, "del_a_" + System.nanoTime())
+            val mgrB = manager(deviceB, "del_b_" + System.nanoTime())
+
+            val vehicleId = deviceA.vehicleDao().insert(
+                Vehicle(name = "Model 3", powertrain = Powertrain.EV, createdAt = 0),
+            )
+            val tripId = deviceA.tripDao().insert(
+                Trip(vehicleId = vehicleId, startedAtMillis = 1_700_000_000_000, status = TripStatus.COMPLETED, distanceKm = 5.0),
+            )
+            val tSync = deviceA.tripDao().getById(tripId)!!.syncId
+            deviceA.obdSampleDao().insertAll(listOf(ObdSample(tripId = tripId, timestampMillis = 1_700_000_000_000, speedKmh = 30.0)))
+
+            // A pushes the trip; B pulls it.
+            mgrA.syncNow(now = 1000).getOrThrow()
+            assertEquals(1, mgrB.syncNow(now = 2000).getOrThrow().tripsImported)
+            assertNotNull(deviceB.tripDao().findBySyncId(tSync))
+
+            // A deletes the synced trip → tombstone, then sync purges the remote folder.
+            repo(deviceA).deleteTrip(tripId)
+            val delReport = mgrA.syncNow(now = 3000).getOrThrow()
+            assertEquals(1, delReport.tripsDeleted)
+            assertNull("A must not re-import its own deleted trip", deviceA.tripDao().findBySyncId(tSync))
+
+            // A re-syncs: the remote folder is gone and the tombstone guards re-import.
+            val reSync = mgrA.syncNow(now = 4000).getOrThrow()
+            assertEquals(0, reSync.tripsImported)
+            assertNull(deviceA.tripDao().findBySyncId(tSync))
+
+            // B pulls the tombstone and drops its local copy.
+            val bPull = mgrB.syncNow(now = 5000).getOrThrow()
+            assertEquals(1, bPull.tripsRemoved)
+            assertNull(deviceB.tripDao().findBySyncId(tSync))
+
+            // Idempotent on B: nothing left to remove or import.
+            val bAgain = mgrB.syncNow(now = 6000).getOrThrow()
+            assertEquals(0, bAgain.tripsRemoved)
+            assertEquals(0, bAgain.tripsImported)
         } finally {
             deviceA.close()
             deviceB.close()

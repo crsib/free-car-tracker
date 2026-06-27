@@ -24,6 +24,9 @@ object WebDavPaths {
     /** Folder holding UDS DID-scan CSVs. Lives beside trips/ under a car, or at the root if car-less. */
     const val DID_SCANS = "did-scans"
 
+    /** Folder of deletion tombstones (one empty marker file per deleted trip syncId). */
+    const val TOMBSTONES = "tombstones"
+
     private val YEAR = DateTimeFormatter.ofPattern("yyyy").withZone(ZoneOffset.UTC)
     private val MONTH = DateTimeFormatter.ofPattern("MM").withZone(ZoneOffset.UTC)
 
@@ -33,6 +36,13 @@ object WebDavPaths {
     fun ledgerBak(vehicleSyncId: String): String = "$vehicleSyncId/$LEDGER_BAK"
 
     fun tripsRoot(vehicleSyncId: String): String = "$vehicleSyncId/trips/"
+
+    /** `{vehicleSyncId}/tombstones/` — sibling of trips/, so the trip pull walk ignores it. */
+    fun tombstonesDir(vehicleSyncId: String): String = "$vehicleSyncId/$TOMBSTONES/"
+
+    /** `{vehicleSyncId}/tombstones/{tripSyncId}` — empty marker; its name is the deleted trip's syncId. */
+    fun tombstoneFile(vehicleSyncId: String, tripSyncId: String): String =
+        tombstonesDir(vehicleSyncId) + tripSyncId
 
     /**
      * Folder for DID-scan CSVs: `{vehicleSyncId}/did-scans/` when the scan is tied to a car, or a

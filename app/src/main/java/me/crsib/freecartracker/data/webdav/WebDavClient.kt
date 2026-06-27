@@ -132,6 +132,18 @@ class WebDavClient(
         }
     }
 
+    /**
+     * DELETE a resource. For a collection path (trailing slash) WebDAV removes it recursively.
+     * A 404 counts as success — the target is already gone, which is what we wanted.
+     */
+    suspend fun delete(config: WebDavConfig, relPath: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(authed(config, absUrl(config, relPath)).delete().build()).execute().use { r ->
+                check(r.isSuccessful || r.code == 404) { "DELETE $relPath -> ${r.code}" }
+            }
+        }
+    }
+
     /** gzip [plain] and PUT it (for the large `.gz` trip files). */
     suspend fun putGzip(config: WebDavConfig, relPath: String, plain: ByteArray): Result<Unit> =
         putBytes(config, relPath, gzip(plain), gzipMedia)

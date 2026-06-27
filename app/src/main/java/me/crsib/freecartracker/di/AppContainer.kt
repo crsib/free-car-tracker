@@ -51,6 +51,9 @@ class AppContainer(val appContext: Context) {
             obdSampleDao = database.obdSampleDao(),
             extendedDao = database.obdExtendedSampleDao(),
             dtcDao = database.dtcDao(),
+            vehicleDao = database.vehicleDao(),
+            deletedTripDao = database.deletedTripDao(),
+            onTripDeleted = { syncTrigger.requestSync() },
         )
     }
 

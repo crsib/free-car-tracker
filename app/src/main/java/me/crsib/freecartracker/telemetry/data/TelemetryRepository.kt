@@ -1,12 +1,15 @@
 package me.crsib.freecartracker.telemetry.data
 
 import kotlinx.coroutines.flow.Flow
+import me.crsib.freecartracker.data.dao.VehicleDao
 import me.crsib.freecartracker.domain.model.TripStatus
+import me.crsib.freecartracker.telemetry.data.dao.DeletedTripDao
 import me.crsib.freecartracker.telemetry.data.dao.DtcDao
 import me.crsib.freecartracker.telemetry.data.dao.GpsPointDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdExtendedSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.TripDao
+import me.crsib.freecartracker.telemetry.data.entity.DeletedTrip
 import me.crsib.freecartracker.telemetry.data.entity.DtcRecord
 import me.crsib.freecartracker.telemetry.data.entity.GpsPoint
 import me.crsib.freecartracker.telemetry.data.entity.ObdExtendedSample
@@ -43,6 +46,11 @@ class TelemetryRepository(
     private val obdSampleDao: ObdSampleDao,
     private val extendedDao: ObdExtendedSampleDao,
     private val dtcDao: DtcDao,
+    // Optional sync wiring. When present, deleting a synced trip leaves a tombstone and kicks a
+    // sync so the remote copy is purged instead of being re-imported on the next pull.
+    private val vehicleDao: VehicleDao? = null,
+    private val deletedTripDao: DeletedTripDao? = null,
+    private val onTripDeleted: () -> Unit = {},
 ) {
     // Trips
     fun observeTrips(vehicleId: Long): Flow<List<Trip>> = tripDao.observeForVehicle(vehicleId)
@@ -50,7 +58,29 @@ class TelemetryRepository(
     suspend fun getTrip(id: Long): Trip? = tripDao.getById(id)
     suspend fun startTrip(trip: Trip): Long = tripDao.insert(trip)
     suspend fun updateTrip(trip: Trip) = tripDao.update(trip)
-    suspend fun deleteTrip(id: Long) = tripDao.deleteById(id)
+    /**
+     * Delete a trip and its time-series (FK cascade). If the trip had been synced to WebDAV,
+     * first record a tombstone keyed by its syncId so the next sync purges the remote copy and
+     * the pull walk won't re-import it; then nudge a sync. Unsynced trips just vanish locally.
+     */
+    suspend fun deleteTrip(id: Long) {
+        val trip = tripDao.getById(id)
+        if (trip != null && trip.syncedAtMillis != null && deletedTripDao != null) {
+            val vehicleSyncId = vehicleDao?.getById(trip.vehicleId)?.syncId
+            if (vehicleSyncId != null) {
+                deletedTripDao.upsert(
+                    DeletedTrip(
+                        tripSyncId = trip.syncId,
+                        vehicleSyncId = vehicleSyncId,
+                        startedAtMillis = trip.startedAtMillis,
+                        deletedAtMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
+        tripDao.deleteById(id)
+        onTripDeleted()
+    }
 
     /** A trip still flagged [TripStatus.RECORDING] (left over after a crash), if any. */
     suspend fun recoverableTrip(): Trip? = tripDao.latestWithStatus(TripStatus.RECORDING)

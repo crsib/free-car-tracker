@@ -17,11 +17,13 @@ import me.crsib.freecartracker.data.entity.CostView
 import me.crsib.freecartracker.data.entity.Expense
 import me.crsib.freecartracker.data.entity.FuelEntry
 import me.crsib.freecartracker.data.entity.Vehicle
+import me.crsib.freecartracker.telemetry.data.dao.DeletedTripDao
 import me.crsib.freecartracker.telemetry.data.dao.DtcDao
 import me.crsib.freecartracker.telemetry.data.dao.GpsPointDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdExtendedSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.ObdSampleDao
 import me.crsib.freecartracker.telemetry.data.dao.TripDao
+import me.crsib.freecartracker.telemetry.data.entity.DeletedTrip
 import me.crsib.freecartracker.telemetry.data.entity.DtcRecord
 import me.crsib.freecartracker.telemetry.data.entity.GpsPoint
 import me.crsib.freecartracker.telemetry.data.entity.ObdExtendedSample
@@ -39,9 +41,10 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
         ObdSample::class,
         ObdExtendedSample::class,
         DtcRecord::class,
+        DeletedTrip::class,
     ],
     views = [CostView::class],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -56,6 +59,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun obdSampleDao(): ObdSampleDao
     abstract fun obdExtendedSampleDao(): ObdExtendedSampleDao
     abstract fun dtcDao(): DtcDao
+    abstract fun deletedTripDao(): DeletedTripDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -200,9 +204,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6 adds the `deleted_trips` tombstone table so a deleted-but-synced trip can be
+         * purged remotely and kept from being re-imported on the next pull.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `deleted_trips` (" +
+                        "`tripSyncId` TEXT NOT NULL, `vehicleSyncId` TEXT NOT NULL, " +
+                        "`startedAtMillis` INTEGER NOT NULL, `deletedAtMillis` INTEGER NOT NULL, " +
+                        "`remotePurged` INTEGER NOT NULL, PRIMARY KEY(`tripSyncId`))",
+                )
+            }
+        }
+
         /** All migrations, in order. Exposed so the migration test can validate them. */
         val ALL_MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {

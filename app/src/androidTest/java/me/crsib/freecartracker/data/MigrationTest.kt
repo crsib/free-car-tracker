@@ -26,14 +26,20 @@ class MigrationTest {
     @Test
     fun migrateAll_fromV1() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Validate the full chain (1 -> 2 -> 3 -> 4 -> 5) against the exported v5 schema.
-        helper.runMigrationsAndValidate(TEST_DB, 5, true, *AppDatabase.ALL_MIGRATIONS)
+        // Validate the full chain (1 -> 2 -> 3 -> 4 -> 5 -> 6) against the exported v6 schema.
+        helper.runMigrationsAndValidate(TEST_DB, 6, true, *AppDatabase.ALL_MIGRATIONS)
     }
 
     @Test
     fun migrate4To5_addsEvTelemetryColumns() {
         helper.createDatabase(TEST_DB, 4).close()
         helper.runMigrationsAndValidate(TEST_DB, 5, true, *AppDatabase.ALL_MIGRATIONS)
+    }
+
+    @Test
+    fun migrate5To6_addsDeletedTripsTable() {
+        helper.createDatabase(TEST_DB, 5).close()
+        helper.runMigrationsAndValidate(TEST_DB, 6, true, *AppDatabase.ALL_MIGRATIONS)
     }
 
     @Test
