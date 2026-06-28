@@ -36,12 +36,25 @@ class SyncImporter(private val db: AppDatabase) {
      */
     suspend fun mergeLedger(doc: LedgerDocument): Boolean {
         val localId = db.vehicleDao().findBySyncId(doc.vehicleSyncId)?.id ?: return false
+        // Ledgers from before schema v3 carry per-device random (or blank) entry ids, so the same
+        // logical entry differs from device to device. Re-key them to the deterministic content id
+        // the v8 migration produced locally, so they merge onto the local copy instead of doubling it.
+        val v = doc.vehicleSyncId
+        val fuelEntries = doc.fuelEntries.maybeRekey(doc.schemaVersion) { e ->
+            e.copy(syncId = legacyLedgerSyncId("f", v, e.dateMillis, e.totalCostMinor))
+        }
+        val chargeEntries = doc.chargeEntries.maybeRekey(doc.schemaVersion) { e ->
+            e.copy(syncId = legacyLedgerSyncId("c", v, e.dateMillis, e.totalCostMinor))
+        }
+        val expenses = doc.expenses.maybeRekey(doc.schemaVersion) { e ->
+            e.copy(syncId = legacyLedgerSyncId("e", v, e.dateMillis, e.totalCostMinor))
+        }
         val remoteTomb = doc.deletedEntries.associate { it.syncId to it.deletedAtMillis }
         db.withTransaction {
             val localTomb = db.deletedLedgerEntryDao().getForVehicle(localId)
                 .associate { it.syncId to it.deletedAtMillis }
             mergeType(
-                remote = doc.fuelEntries,
+                remote = fuelEntries,
                 local = db.fuelEntryDao().getForVehicle(localId),
                 localTomb = localTomb, remoteTomb = remoteTomb, localVehicleId = localId,
                 rekey = { e: FuelEntry, existingId, vId -> e.copy(id = existingId ?: 0, vehicleId = vId) },
@@ -49,7 +62,7 @@ class SyncImporter(private val db: AppDatabase) {
                 deleteBySyncId = { db.fuelEntryDao().deleteBySyncId(it) },
             )
             mergeType(
-                remote = doc.chargeEntries,
+                remote = chargeEntries,
                 local = db.chargeEntryDao().getForVehicle(localId),
                 localTomb = localTomb, remoteTomb = remoteTomb, localVehicleId = localId,
                 rekey = { e: ChargeEntry, existingId, vId -> e.copy(id = existingId ?: 0, vehicleId = vId) },
@@ -57,7 +70,7 @@ class SyncImporter(private val db: AppDatabase) {
                 deleteBySyncId = { db.chargeEntryDao().deleteBySyncId(it) },
             )
             mergeType(
-                remote = doc.expenses,
+                remote = expenses,
                 local = db.expenseDao().getForVehicle(localId),
                 localTomb = localTomb, remoteTomb = remoteTomb, localVehicleId = localId,
                 rekey = { e: Expense, existingId, vId -> e.copy(id = existingId ?: 0, vehicleId = vId) },
@@ -114,6 +127,10 @@ class SyncImporter(private val db: AppDatabase) {
             else -> maxOf(a, b)
         }
 
+    /** Re-key every element when [schemaVersion] predates deterministic entry ids; else pass through. */
+    private inline fun <T> List<T>.maybeRekey(schemaVersion: Int, transform: (T) -> T): List<T> =
+        if (schemaVersion < LEDGER_SCHEMA_DETERMINISTIC_IDS) map(transform) else this
+
     /**
      * Import one finished trip. Skips if a trip with the same syncId already exists (trips are
      * immutable) or if the parent vehicle is missing locally. Inserts the trip plus its parsed
@@ -136,5 +153,29 @@ class SyncImporter(private val db: AppDatabase) {
             db.dtcDao().insertAll(manifest.dtcs.map { it.copy(id = 0, tripId = newTripId) })
         }
         return true
+    }
+
+    companion object {
+        /**
+         * First [LedgerDocument.schemaVersion] whose entry `syncId`s are deterministic and
+         * content-derived. Older snapshots carry per-device random ids and must be re-keyed on merge.
+         */
+        const val LEDGER_SCHEMA_DETERMINISTIC_IDS = 3
+
+        /**
+         * Deterministic cross-device id for a pre-v3 ledger entry, derived from its stable vehicle
+         * [vehicleSyncId] plus integer-only content ([dateMillis], [totalCostMinor]) so two devices
+         * compute the identical value for the same entry. Integer-only on purpose — float text
+         * formatting differs between SQLite and Kotlin. [tag] (`f`/`c`/`e`) keeps the three entry
+         * types from colliding in the shared id space (the tombstone table is keyed by syncId alone).
+         *
+         * MUST stay byte-for-byte identical to the SQL in `AppDatabase.MIGRATION_7_8`.
+         */
+        fun legacyLedgerSyncId(
+            tag: String,
+            vehicleSyncId: String,
+            dateMillis: Long,
+            totalCostMinor: Long,
+        ): String = "l3:$tag:$vehicleSyncId:$dateMillis:$totalCostMinor"
     }
 }

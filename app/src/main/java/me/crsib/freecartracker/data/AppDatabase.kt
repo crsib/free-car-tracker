@@ -47,7 +47,7 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
         DeletedLedgerEntry::class,
     ],
     views = [CostView::class],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -259,11 +259,52 @@ abstract class AppDatabase : RoomDatabase() {
                     "lower(hex(randomblob(6)))"
         }
 
+        /**
+         * v8 repairs the divergent-identity bug introduced by [MIGRATION_6_7]: that migration
+         * gave every pre-existing ledger entry a *random* `syncId`, run independently on each
+         * device, so the same logical entry got a different id everywhere. The new per-entry merge
+         * then saw those as distinct rows and duplicated them across devices.
+         *
+         * This re-keys every entry to a deterministic id derived from its (already cross-device
+         * stable) vehicle plus its own content — see [SyncImporter.legacyLedgerSyncId], which must
+         * stay byte-for-byte in sync with the SQL below so a stale remote ledger re-keys to the
+         * same value. Rows that collide after re-keying are the duplicates; we keep the lowest
+         * `id` and drop the rest. Every device runs this and converges on one id per entry.
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for ((table, tag) in listOf(
+                    "fuel_entries" to "f", "charge_entries" to "c", "expenses" to "e",
+                )) {
+                    // Drop the unique syncId index so the re-key can transiently collide.
+                    db.execSQL("DROP INDEX IF EXISTS `index_${table}_syncId`")
+                    db.execSQL(
+                        "UPDATE `$table` SET `syncId` = 'l3:$tag:' || " +
+                            "IFNULL((SELECT `v`.`syncId` FROM `vehicles` `v` " +
+                            "WHERE `v`.`id` = `$table`.`vehicleId`), CAST(`$table`.`vehicleId` AS TEXT)) || " +
+                            "':' || `$table`.`dateMillis` || ':' || `$table`.`totalCostMinor`",
+                    )
+                    // Collapse rows that now share an id (the duplicates), keeping the lowest id.
+                    db.execSQL(
+                        "DELETE FROM `$table` WHERE `id` NOT IN " +
+                            "(SELECT MIN(`id`) FROM `$table` GROUP BY `syncId`)",
+                    )
+                    db.execSQL(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS `index_${table}_syncId` ON `$table` (`syncId`)",
+                    )
+                }
+                // Tombstones written under v7 reference now-defunct random ids; drop them so they
+                // can't mis-delete a re-keyed entry. (Pre-v8 deletions made in this window are rare;
+                // the entry simply reappears and can be deleted again.)
+                db.execSQL("DELETE FROM `deleted_ledger_entries`")
+            }
+        }
+
         /** All migrations, in order. Exposed so the migration test can validate them. */
         val ALL_MIGRATIONS: Array<Migration> =
             arrayOf(
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                MIGRATION_6_7,
+                MIGRATION_6_7, MIGRATION_7_8,
             )
 
         fun get(context: Context): AppDatabase =

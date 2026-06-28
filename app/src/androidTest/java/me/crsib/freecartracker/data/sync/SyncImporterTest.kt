@@ -129,6 +129,40 @@ class SyncImporterTest {
     }
 
     @Test
+    fun mergeLedger_legacyDocRekeysOntoLocalInsteadOfDuplicating() = runBlocking {
+        importer.importVehicle(VehicleDocument(exportedAt = 1, vehicle = vehicle("v-1", "Car")))
+        val localId = db.vehicleDao().findBySyncId("v-1")!!.id
+
+        // Local entry already carries the deterministic id the v8 migration would assign.
+        db.fuelEntryDao().upsert(
+            FuelEntry(
+                vehicleId = localId, dateMillis = 100, odometerKm = 1000.0, volumeL = 40.0,
+                totalCostMinor = 5000, currency = "USD", isFullTank = true,
+                syncId = SyncImporter.legacyLedgerSyncId("f", "v-1", 100, 5000), updatedAtMillis = 100,
+            ),
+        )
+
+        // A pre-v3 remote ledger describes the *same* entry under a stale random id. It must merge
+        // onto the local row, not add a second copy.
+        val ok = importer.mergeLedger(
+            LedgerDocument(
+                schemaVersion = 2, exportedAt = 2, vehicleSyncId = "v-1",
+                fuelEntries = listOf(
+                    FuelEntry(
+                        vehicleId = 0, dateMillis = 100, odometerKm = 1000.0, volumeL = 40.0,
+                        totalCostMinor = 5000, currency = "USD", isFullTank = true,
+                        syncId = "stale-random-id", updatedAtMillis = 50,
+                    ),
+                ),
+            ),
+        )
+        assertTrue(ok)
+        val stored = db.fuelEntryDao().getForVehicle(localId)
+        assertEquals(1, stored.size) // converged, not duplicated
+        assertEquals(SyncImporter.legacyLedgerSyncId("f", "v-1", 100, 5000), stored[0].syncId)
+    }
+
+    @Test
     fun importTrip_insertsOnceAndDedupsBySyncId() = runBlocking {
         importer.importVehicle(VehicleDocument(exportedAt = 1, vehicle = vehicle("v-1", "Car")))
 

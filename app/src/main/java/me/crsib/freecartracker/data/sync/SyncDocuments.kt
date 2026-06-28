@@ -26,12 +26,15 @@ data class LedgerTombstone(
 /**
  * `ledger.json` — one car's fuel/charge/expense snapshot. [exportedAt] is a coarse write clock;
  * actual conflict resolution is per-entry by `syncId` + `updatedAtMillis`, with [deletedEntries]
- * carrying tombstones so deletions aren't undone by a stale peer. `schemaVersion` 2 is the
- * mergeable format (entries carry a `syncId`); version 1 is the legacy whole-document snapshot.
+ * carrying tombstones so deletions aren't undone by a stale peer. `schemaVersion` history:
+ * 1 = legacy whole-document snapshot (no per-entry ids); 2 = mergeable but entries carry *random*
+ * per-device ids (the source of cross-device duplicates); 3 = entries carry *deterministic*
+ * content-derived ids ([SyncImporter.legacyLedgerSyncId]), so the same entry has one id everywhere.
+ * Readers re-key any document below version 3 on merge — see [SyncImporter.mergeLedger].
  */
 @Serializable
 data class LedgerDocument(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = SyncImporter.LEDGER_SCHEMA_DETERMINISTIC_IDS,
     val exportedAt: Long,
     val vehicleSyncId: String,
     val fuelEntries: List<FuelEntry> = emptyList(),
