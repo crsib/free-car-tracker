@@ -3,16 +3,24 @@ package me.crsib.freecartracker.ui.telemetry
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -31,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -122,6 +131,7 @@ fun TripListScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TripRow(
     trip: Trip,
@@ -138,17 +148,33 @@ private fun TripRow(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(formatDate(trip.startedAtMillis), fontWeight = FontWeight.Medium)
-                Text(
-                    tripSummaryLine(trip, avgFuelUsageL100),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                finalOdometerKm?.let {
+                val hasStats = trip.distanceKm != null || trip.durationSec != null ||
+                    trip.avgSpeedKmh != null || avgFuelUsageL100 != null
+                if (hasStats) {
+                    // Each stat is an atomic icon+value, so FlowRow wraps whole stats to the next
+                    // line instead of breaking a value mid-token (e.g. "8.8 L/" / "100km").
+                    FlowRow(
+                        modifier = Modifier.padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        trip.distanceKm?.let { SummaryStat(Icons.Filled.Route, "${formatNumber(it)} km") }
+                        trip.durationSec?.let { SummaryStat(Icons.Filled.Schedule, formatDuration(it)) }
+                        trip.avgSpeedKmh?.let { SummaryStat(Icons.Filled.Speed, "${formatNumber(it)} km/h") }
+                        avgFuelUsageL100?.let { SummaryStat(Icons.Filled.LocalGasStation, "${formatNumber(it)} L/100km") }
+                    }
+                } else {
                     Text(
-                        "Odometer ${formatNumber(it, 0)} km",
+                        "No summary",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                finalOdometerKm?.let {
+                    SummaryStat(
+                        icon = Icons.Filled.Straighten,
+                        text = "${formatNumber(it, 0)} km",
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
                 if (trip.status == TripStatus.ABORTED) {
@@ -176,13 +202,26 @@ private fun TripRow(
     }
 }
 
-private fun tripSummaryLine(trip: Trip, avgFuelUsageL100: Double?): String {
-    val parts = buildList {
-        trip.distanceKm?.let { add("${formatNumber(it)} km") }
-        trip.durationSec?.let { add(formatDuration(it)) }
-        trip.avgSpeedKmh?.let { add("avg ${formatNumber(it)} km/h") }
-        // The aggregate when present, otherwise a tank-drop estimate (see TripListViewModel).
-        avgFuelUsageL100?.let { add("${formatNumber(it)} L/100km") }
+/** One trip statistic: a small icon and its value, kept on a single line so it never breaks mid-value. */
+@Composable
+private fun SummaryStat(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false,
+        )
     }
-    return if (parts.isEmpty()) "No summary" else parts.joinToString(" · ")
 }
