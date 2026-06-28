@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -101,11 +102,16 @@ fun TripChart(
     averageLine: Boolean = false,
     /** Draw a least-squares linear regression line across the series. */
     trendLine: Boolean = false,
+    /** Render bars instead of a connected line. Good for a handful of discrete points. */
+    barChart: Boolean = false,
 ) {
     if (points.size < 2) return
 
-    val min = points.minOf { it.value }
-    val max = points.maxOf { it.value }
+    val dataMin = points.minOf { it.value }
+    val dataMax = points.maxOf { it.value }
+    // Bars must include the zero baseline so their height encodes magnitude honestly.
+    val min = if (barChart) minOf(0f, dataMin) else dataMin
+    val max = if (barChart) maxOf(0f, dataMax) else dataMax
     val range = (max - min).takeIf { it > 0f } ?: 1f
     val domainSpan = (domainEndMillis - domainStartMillis).coerceAtLeast(1L)
 
@@ -219,7 +225,39 @@ fun TripChart(
                 )
             }
 
-            // Reference overlays, drawn under the data line: mean (dashed) and a linear trend fit.
+            // Data: only the visible time window (plus one point each side for line continuity),
+            // so deep zoom stays cheap.
+            val visStartT = domainStartMillis + (pan * domainSpan).toLong()
+            val visEndT = domainStartMillis + ((pan + 1f / scale) * domainSpan).toLong()
+            var firstIdx = points.indexOfFirst { it.timeMillis >= visStartT }
+            if (firstIdx < 0) firstIdx = points.lastIndex
+            firstIdx = (firstIdx - 1).coerceAtLeast(0)
+            var lastIdx = points.indexOfLast { it.timeMillis <= visEndT }
+            if (lastIdx < 0) lastIdx = 0
+            lastIdx = (lastIdx + 1).coerceAtMost(points.lastIndex)
+            if (barChart) {
+                val baselineY = yForValue(min)
+                val barW = ((plotW * scale) / points.size * 0.55f).coerceIn(4.dp.toPx(), 48.dp.toPx())
+                clipRect(plotLeft, plotTop, plotRight, plotBottom) {
+                    for (i in firstIdx..lastIdx) {
+                        val cx = xForTime(points[i].timeMillis)
+                        val topY = yForValue(points[i].value)
+                        drawRect(
+                            color = lineColor,
+                            topLeft = Offset(cx - barW / 2f, minOf(topY, baselineY)),
+                            size = Size(barW, abs(baselineY - topY)),
+                        )
+                    }
+                }
+            } else if (lastIdx > firstIdx) {
+                val path = Path().apply {
+                    moveTo(xForTime(points[firstIdx].timeMillis), yForValue(points[firstIdx].value))
+                    for (i in firstIdx + 1..lastIdx) lineTo(xForTime(points[i].timeMillis), yForValue(points[i].value))
+                }
+                drawPath(path, color = lineColor, style = Stroke(width = 3.dp.toPx()))
+            }
+
+            // Reference overlays, on top of the data: mean (dashed) and a linear trend fit.
             if (averageLine) {
                 val y = yForValue(mean)
                 drawLine(
@@ -240,24 +278,6 @@ fun TripChart(
                     Offset(xForTime(t0), yForValue(y0)), Offset(xForTime(t1), yForValue(y1)),
                     strokeWidth = 2.dp.toPx(),
                 )
-            }
-
-            // The line: only the visible time window (plus one point each side for continuity),
-            // so deep zoom stays cheap.
-            val visStartT = domainStartMillis + (pan * domainSpan).toLong()
-            val visEndT = domainStartMillis + ((pan + 1f / scale) * domainSpan).toLong()
-            var firstIdx = points.indexOfFirst { it.timeMillis >= visStartT }
-            if (firstIdx < 0) firstIdx = points.lastIndex
-            firstIdx = (firstIdx - 1).coerceAtLeast(0)
-            var lastIdx = points.indexOfLast { it.timeMillis <= visEndT }
-            if (lastIdx < 0) lastIdx = 0
-            lastIdx = (lastIdx + 1).coerceAtMost(points.lastIndex)
-            if (lastIdx > firstIdx) {
-                val path = Path().apply {
-                    moveTo(xForTime(points[firstIdx].timeMillis), yForValue(points[firstIdx].value))
-                    for (i in firstIdx + 1..lastIdx) lineTo(xForTime(points[i].timeMillis), yForValue(points[i].value))
-                }
-                drawPath(path, color = lineColor, style = Stroke(width = 3.dp.toPx()))
             }
 
             // Scrub cursor + tooltip: snap to this series' sample nearest the shared selected time.

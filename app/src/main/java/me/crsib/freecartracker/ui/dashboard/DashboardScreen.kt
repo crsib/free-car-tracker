@@ -192,6 +192,7 @@ fun DashboardScreen(
                                 timeLabel = { formatDate(it) },
                                 averageLine = true,
                                 trendLine = true,
+                                barChart = true,
                                 modifier = Modifier.padding(top = 12.dp),
                             )
                             Row(
