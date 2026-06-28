@@ -13,6 +13,9 @@ import kotlinx.coroutines.launch
 import me.crsib.freecartracker.data.VehicleSelection
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.repository.EntryRepository
+import me.crsib.freecartracker.domain.ChargePoint
+import me.crsib.freecartracker.domain.EconomyCalculator
+import me.crsib.freecartracker.domain.FuelPoint
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.Recurrence
@@ -64,17 +67,32 @@ class HistoryViewModel(
                     val system = vehicle.unitSystem
                     val dUnit = UnitConversions.distanceUnit(system)
                     val vUnit = UnitConversions.volumeUnit(system)
+                    val ecoUnit = UnitConversions.fuelEconomyUnit(system)
+                    val elUnit = UnitConversions.electricEconomyUnit(system)
+
+                    // Per-entry average consumption: each economy segment closes at a fill/charge,
+                    // identified by its odometer, so key by the closing odometer to attach it.
+                    val fuelEcoByOdo = EconomyCalculator
+                        .fuelSegments(fuel.map { FuelPoint(it.odometerKm, it.volumeL, it.isFullTank, it.dateMillis) })
+                        .associateBy({ it.endOdometerKm }, { it.litresPer100Km })
+                    val chargeEcoByOdo = EconomyCalculator
+                        .chargeSegments(charge.map { ChargePoint(it.odometerKm, it.energyKwh, it.dateMillis) })
+                        .associateBy({ it.endOdometerKm }, { it.kwhPer100Km })
+
                     val all = buildList {
                         fuel.forEach { e ->
                             val odo = formatNumber(UnitConversions.kmToDisplay(e.odometerKm, system), 0)
                             val vol = formatNumber(UnitConversions.litresToDisplay(e.volumeL, system), 1)
+                            val eco = fuelEcoByOdo[e.odometerKm]
+                                ?.let { UnitConversions.fuelEconomyToDisplay(it, system) }
+                                ?.let { " · ${formatNumber(it, 1)} $ecoUnit" } ?: ""
                             add(
                                 HistoryItem(
                                     kind = EntryKind.FUEL,
                                     id = e.id,
                                     dateMillis = e.dateMillis,
                                     title = "Fuel",
-                                    subtitle = "$vol $vUnit · $odo $dUnit" + if (e.isFullTank) " · full" else "",
+                                    subtitle = "$vol $vUnit · $odo $dUnit" + (if (e.isFullTank) " · full" else "") + eco,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "fuel ${e.station.orEmpty()} ${e.note.orEmpty()}",
@@ -82,6 +100,9 @@ class HistoryViewModel(
                             )
                         }
                         charge.forEach { e ->
+                            val eco = e.odometerKm?.let { chargeEcoByOdo[it] }
+                                ?.let { UnitConversions.electricEconomyToDisplay(it, system) }
+                                ?.let { " · ${formatNumber(it, 1)} $elUnit" } ?: ""
                             add(
                                 HistoryItem(
                                     kind = EntryKind.CHARGE,
@@ -89,7 +110,7 @@ class HistoryViewModel(
                                     dateMillis = e.dateMillis,
                                     title = "Charging",
                                     subtitle = "${formatNumber(e.energyKwh, 1)} kWh" +
-                                        (e.location?.let { " · $it" } ?: ""),
+                                        (e.location?.let { " · $it" } ?: "") + eco,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "charge ${e.location.orEmpty()} ${e.note.orEmpty()}",
