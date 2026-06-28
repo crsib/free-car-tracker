@@ -97,6 +97,10 @@ fun TripChart(
     valueFormat: (Float) -> String = { formatNumber(it.toDouble()) },
     /** Tooltip's secondary line for a point's absolute time. Defaults to elapsed time from the start. */
     timeLabel: (Long) -> String = { t -> formatDuration((t - domainStartMillis) / 1000) },
+    /** Draw a horizontal line at the mean of the values. */
+    averageLine: Boolean = false,
+    /** Draw a least-squares linear regression line across the series. */
+    trendLine: Boolean = false,
 ) {
     if (points.size < 2) return
 
@@ -112,7 +116,28 @@ fun TripChart(
     val haloColor = MaterialTheme.colorScheme.surface
     val tooltipBg = MaterialTheme.colorScheme.inverseSurface
     val tooltipText = MaterialTheme.colorScheme.inverseOnSurface
+    val averageColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val trendColor = Color(0xFFEF6C00)
     val measurer = rememberTextMeasurer()
+
+    // Mean and least-squares fit (value = a + b·tRelative), computed over all points. The fit uses
+    // time relative to the domain start to keep the numbers small.
+    val mean = points.map { it.value }.average().toFloat()
+    val fit = remember(points) {
+        val xs = points.map { (it.timeMillis - domainStartMillis).toDouble() }
+        val ys = points.map { it.value.toDouble() }
+        val mx = xs.average()
+        val my = ys.average()
+        var sxx = 0.0
+        var sxy = 0.0
+        for (i in points.indices) {
+            val dx = xs[i] - mx
+            sxx += dx * dx
+            sxy += dx * (ys[i] - my)
+        }
+        val slope = if (sxx != 0.0) sxy / sxx else 0.0
+        slope to (my - slope * mx) // (b, a)
+    }
 
     Box(modifier.fillMaxWidth()) {
         Canvas(
@@ -191,6 +216,29 @@ fun TripChart(
                         plotLeft - label.size.width - 4.dp.toPx(),
                         (y - label.size.height / 2f).coerceIn(0f, size.height - label.size.height),
                     ),
+                )
+            }
+
+            // Reference overlays, drawn under the data line: mean (dashed) and a linear trend fit.
+            if (averageLine) {
+                val y = yForValue(mean)
+                drawLine(
+                    averageColor.copy(alpha = 0.7f),
+                    Offset(plotLeft, y), Offset(plotRight, y),
+                    strokeWidth = 1.5.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                )
+            }
+            if (trendLine) {
+                val (slope, intercept) = fit
+                val t0 = points.first().timeMillis
+                val t1 = points.last().timeMillis
+                val y0 = (intercept + slope * (t0 - domainStartMillis)).toFloat()
+                val y1 = (intercept + slope * (t1 - domainStartMillis)).toFloat()
+                drawLine(
+                    trendColor,
+                    Offset(xForTime(t0), yForValue(y0)), Offset(xForTime(t1), yForValue(y1)),
+                    strokeWidth = 2.dp.toPx(),
                 )
             }
 

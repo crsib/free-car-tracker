@@ -1,13 +1,17 @@
 package me.crsib.freecartracker.ui.dashboard
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -32,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -185,8 +190,18 @@ fun DashboardScreen(
                                 domainEndMillis = trendPoints.last().timeMillis,
                                 unit = UnitConversions.fuelEconomyUnit(system),
                                 timeLabel = { formatDate(it) },
+                                averageLine = true,
+                                trendLine = true,
                                 modifier = Modifier.padding(top = 12.dp),
                             )
+                            Row(
+                                Modifier.padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            ) {
+                                LegendItem(Color(0xFF1565C0), "Consumption")
+                                LegendItem(MaterialTheme.colorScheme.onSurfaceVariant, "Average")
+                                LegendItem(Color(0xFFEF6C00), "Trend")
+                            }
                         }
                     }
                 }
@@ -358,6 +373,14 @@ private fun StatRow(label: String, value: String) {
     ) {
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Text(value, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun LegendItem(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.width(16.dp).height(3.dp).background(color))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

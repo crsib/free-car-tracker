@@ -124,6 +124,7 @@ class DashboardViewModel(
 
             val segments = EconomyCalculator.fuelSegments(fuelPoints)
             val trend = segments
+                .filter { it.endDateMillis >= since }
                 .map { TrendPoint(it.endDateMillis, it.litresPer100Km) }
                 .takeLast(12)
             val windowSegmentEconomies = segments
