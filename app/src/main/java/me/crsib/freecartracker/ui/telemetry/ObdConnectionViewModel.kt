@@ -544,7 +544,7 @@ class ObdConnectionViewModel(
                 var failed = 0
                 for (sub in DiagnosticFiles.allSubdirs) {
                     val files = File(appContext.filesDir, sub)
-                        .listFiles { f -> f.isFile && f.name.endsWith(".csv") }.orEmpty()
+                        .listFiles { f -> f.isFile && (f.name.endsWith(".csv") || f.name.endsWith(".log")) }.orEmpty()
                     for (f in files) {
                         webDav.uploadDidScanIfMissing(vehicleSyncId, f.name, f.readBytes()).fold(
                             onSuccess = { if (it) uploaded++ else alreadyThere++ },

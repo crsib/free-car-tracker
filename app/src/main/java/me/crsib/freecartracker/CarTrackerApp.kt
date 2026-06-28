@@ -6,6 +6,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import me.crsib.freecartracker.data.webdav.WebDavBackupWorker
 import me.crsib.freecartracker.di.AppContainer
+import me.crsib.freecartracker.telemetry.DiagLog
+import me.crsib.freecartracker.telemetry.obd.scan.DiagnosticFiles
 import org.osmdroid.config.Configuration
 import java.io.File
 
@@ -15,6 +17,9 @@ class CarTrackerApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Persist telemetry diagnostics to a file (logcat is wiped on reboot / unreachable on a
+        // head unit), retrievable via the diagnostics force-sync.
+        DiagLog.init(File(filesDir, DiagnosticFiles.TELEMETRY_LOGS))
         container = AppContainer(this)
         // osmdroid: identify ourselves to OSM tile servers and cache tiles in app-internal
         // storage so no external-storage permission is required (works on no-GMS head units).

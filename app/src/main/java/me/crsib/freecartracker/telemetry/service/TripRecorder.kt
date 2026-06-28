@@ -1,10 +1,10 @@
 package me.crsib.freecartracker.telemetry.service
 
-import android.util.Log
 import me.crsib.freecartracker.data.repository.VehicleRepository
 import me.crsib.freecartracker.domain.model.ObdTransportKind
 import me.crsib.freecartracker.domain.model.TripStatus
 import me.crsib.freecartracker.telemetry.DerivedMetrics
+import me.crsib.freecartracker.telemetry.DiagLog
 import me.crsib.freecartracker.telemetry.TripAggregator
 import me.crsib.freecartracker.telemetry.data.TelemetryRepository
 import me.crsib.freecartracker.telemetry.data.TripAggregates
@@ -179,7 +179,7 @@ class TripRecorder(
                         def.command.pid.uppercase() in supported
                 }
                 val poller = AdaptivePoller(session, AdaptivePollSchedule.from(defs))
-                Log.i(TAG, "OBD connected (${config.kind}); supported=${supported.size}; polling ${defs.size}: ${defs.map { it.key }}")
+                DiagLog.i(TAG, "OBD connected (${config.kind}); supported=${supported.size}; polling ${defs.size}: ${defs.map { it.key }}")
                 _recordingState.value = RecordingState.RECORDING
                 _liveState.update { it.copy(obdConnected = true) }
                 obdLostSince = null
@@ -189,7 +189,7 @@ class TripRecorder(
                 runCatching { transport?.close() }
                 throw c
             } catch (e: Exception) {
-                Log.w(TAG, "OBD session ended; reconnecting in ${backoffMs}ms (${e.javaClass.simpleName}: ${e.message})")
+                DiagLog.w(TAG, "OBD session ended; reconnecting in ${backoffMs}ms (${e.javaClass.simpleName}: ${e.message})")
                 _recordingState.value = RecordingState.RECONNECTING
                 _liveState.update { it.copy(obdConnected = false) }
                 if (obdLostSince == null) obdLostSince = clock()

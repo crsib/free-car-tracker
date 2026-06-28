@@ -11,5 +11,8 @@ object DiagnosticFiles {
     const val INIT_MAPS = "init-maps"
     const val WATCH_LOGS = "did-watch"
 
-    val allSubdirs = listOf(DID_SCANS, STD_PID_SWEEPS, INIT_MAPS, WATCH_LOGS)
+    /** Rotating telemetry diagnostics log (poll health, PID drop-outs, reconnects). */
+    const val TELEMETRY_LOGS = "telemetry-logs"
+
+    val allSubdirs = listOf(DID_SCANS, STD_PID_SWEEPS, INIT_MAPS, WATCH_LOGS, TELEMETRY_LOGS)
 }

@@ -1,10 +1,10 @@
 package me.crsib.freecartracker.telemetry.obd
 
-import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
+import me.crsib.freecartracker.telemetry.DiagLog
 import me.crsib.freecartracker.telemetry.obd.pid.PidDefinition
 import me.crsib.freecartracker.telemetry.obd.pid.PollPriority
 import java.io.IOException
@@ -125,7 +125,7 @@ class AdaptivePoller(
             val batch = schedule.nextBatch()
             // Every PID has been disabled — the adapter/ECU has stopped responding entirely.
             if (batch.isEmpty()) {
-                Log.w(TAG, "all PIDs disabled after repeated failures — treating as connection lost")
+                DiagLog.w(TAG, "all PIDs disabled after repeated failures — treating as connection lost")
                 throw ObdConnectionLostException("all PIDs disabled after repeated failures")
             }
             val out = ArrayList<ObdReading>(batch.size)
@@ -144,16 +144,16 @@ class AdaptivePoller(
             // session that ends up stuck on one PID.
             val nowDisabled = schedule.disabledKeys
             (nowDisabled - prevDisabled).takeIf { it.isNotEmpty() }?.let {
-                Log.w(TAG, "PID(s) disabled after repeated failures: ${it.sorted()}; still active: ${schedule.activeKeys.sorted()}")
+                DiagLog.w(TAG, "PID(s) disabled after repeated failures: ${it.sorted()}; still active: ${schedule.activeKeys.sorted()}")
             }
             (prevDisabled - nowDisabled).takeIf { it.isNotEmpty() }?.let {
-                Log.i(TAG, "re-probing previously disabled PID(s): ${it.sorted()}")
+                DiagLog.i(TAG, "re-probing previously disabled PID(s): ${it.sorted()}")
             }
             prevDisabled = nowDisabled
 
             // Periodic health snapshot: which PIDs actually produced data, and what's disabled.
             if (cycle % HEALTH_EVERY_CYCLES == 0) {
-                Log.i(
+                DiagLog.i(
                     TAG,
                     "health cycle=$cycle: produced=${producedSinceHealth.sorted()}; " +
                         "active=${schedule.activeKeys.size}; disabled=${nowDisabled.sorted()}; deadCycles=$deadCycles",
@@ -165,7 +165,7 @@ class AdaptivePoller(
             // mapped to null). Surface it so the caller can reconnect instead of spinning forever.
             if (out.isEmpty()) {
                 if (++deadCycles >= maxDeadCycles) {
-                    Log.w(TAG, "no readings for $deadCycles cycles — treating as connection lost")
+                    DiagLog.w(TAG, "no readings for $deadCycles cycles — treating as connection lost")
                     throw ObdConnectionLostException("no readings for $deadCycles cycles")
                 }
             } else {
