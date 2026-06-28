@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,6 +89,19 @@ private fun AmountBadge.description(): String = when (this) {
     AmountBadge.TANK_PARTIAL -> "Partial fill"
     AmountBadge.BATTERY_UNKNOWN -> "Charge"
     else -> "Battery level"
+}
+
+// Colour carries the level at a glance (the filled/outlined icon shapes are too subtle alone).
+private val LevelGreen = Color(0xFF2E7D32)
+private val LevelAmber = Color(0xFFF9A825)
+private val LevelRed = Color(0xFFC62828)
+
+@Composable
+private fun AmountBadge.tint(): Color = when (this) {
+    AmountBadge.TANK_FULL, AmountBadge.BATTERY_FULL, AmountBadge.BATTERY_HIGH -> LevelGreen
+    AmountBadge.BATTERY_MID, AmountBadge.BATTERY_LOW -> LevelAmber
+    AmountBadge.BATTERY_EMPTY -> LevelRed
+    AmountBadge.TANK_PARTIAL, AmountBadge.BATTERY_UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable
@@ -240,8 +254,8 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
                     Icon(
                         badge.vector(),
                         contentDescription = badge.description(),
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                        tint = badge.tint(),
                     )
                 }
                 Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
