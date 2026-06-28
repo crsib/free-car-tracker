@@ -168,8 +168,18 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
                         ) {
                             Text(if (state.diagSyncing) "Syncing…" else "Sync diagnostic files to WebDAV", maxLines = 1, softWrap = false)
                         }
+                        OutlinedButton(
+                            onClick = vm::uploadDiagnosticsLog,
+                            enabled = !state.logUploading,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (state.logUploading) "Uploading…" else "Upload diagnostics log to WebDAV", maxLines = 1, softWrap = false)
+                        }
                     }
                     state.diagSyncStatus?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                    }
+                    state.logUploadStatus?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
                     }
                     state.testResult?.let {

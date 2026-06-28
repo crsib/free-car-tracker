@@ -99,6 +99,9 @@ data class ObdConnUiState(
     // --- Force-sync of locally-saved diagnostic CSVs to WebDAV ---
     val diagSyncing: Boolean = false,
     val diagSyncStatus: String? = null,
+    // --- Upload of the persisted telemetry diagnostics log to WebDAV ---
+    val logUploading: Boolean = false,
+    val logUploadStatus: String? = null,
     // --- Live DID watch (correlation aid) ---
     val watching: Boolean = false,
     /** Free-text watch list, "HEADER DID" per line; seeded from the last scan's hits. */
@@ -544,7 +547,7 @@ class ObdConnectionViewModel(
                 var failed = 0
                 for (sub in DiagnosticFiles.allSubdirs) {
                     val files = File(appContext.filesDir, sub)
-                        .listFiles { f -> f.isFile && (f.name.endsWith(".csv") || f.name.endsWith(".log")) }.orEmpty()
+                        .listFiles { f -> f.isFile && f.name.endsWith(".csv") }.orEmpty()
                     for (f in files) {
                         webDav.uploadDidScanIfMissing(vehicleSyncId, f.name, f.readBytes()).fold(
                             onSuccess = { if (it) uploaded++ else alreadyThere++ },
@@ -557,6 +560,33 @@ class ObdConnectionViewModel(
                     if (failed > 0) "; $failed failed (no connection?)." else "."
             }
             _state.update { it.copy(diagSyncing = false, diagSyncStatus = status) }
+        }
+    }
+
+    /** Upload the persisted telemetry diagnostics log (current + rotated backup) to WebDAV. */
+    fun uploadDiagnosticsLog() {
+        if (_state.value.logUploading) return
+        _state.update { it.copy(logUploading = true, logUploadStatus = "Uploading…") }
+        viewModelScope.launch {
+            val status = withContext(Dispatchers.IO) {
+                if (!webDav.config().isConfigured) return@withContext "WebDAV not configured."
+                val files = File(appContext.filesDir, DiagnosticFiles.TELEMETRY_LOGS)
+                    .listFiles { f -> f.isFile }.orEmpty().sortedBy { it.name }
+                if (files.isEmpty()) return@withContext "No diagnostics log yet."
+                val syncId = resolveVehicleSyncId()
+                val stamp = System.currentTimeMillis()
+                var uploaded = 0
+                var failed = 0
+                for (f in files) {
+                    webDav.uploadDidScan(syncId, "telemetry-$stamp-${f.name}", f.readBytes()).fold(
+                        onSuccess = { uploaded++ },
+                        onFailure = { failed++ },
+                    )
+                }
+                if (failed == 0) "Uploaded diagnostics log ($uploaded file) to WebDAV."
+                else "Uploaded $uploaded; $failed failed (no connection?)."
+            }
+            _state.update { it.copy(logUploading = false, logUploadStatus = status) }
         }
     }
 
