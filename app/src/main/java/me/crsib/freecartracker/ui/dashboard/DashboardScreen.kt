@@ -2,6 +2,7 @@ package me.crsib.freecartracker.ui.dashboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -117,8 +119,23 @@ fun DashboardScreen(
         }
 
         val system = vehicle.unitSystem
+
+        // Trend as evenly-spaced bars: feed synthetic indices (1,3,5,…) as the x so the bars don't
+        // bunch up by calendar date, and map back to the real fill date for the tooltip.
+        val trendVals = state.trend
+            .sortedBy { it.dateMillis }
+            .mapNotNull { tp ->
+                UnitConversions.fuelEconomyToDisplay(tp.litresPer100Km, system)?.let { tp.dateMillis to it.toFloat() }
+            }
+        val trendPoints = trendVals.mapIndexed { i, (_, v) -> ChartPoint(2L * i + 1L, v) }
+        val trendSync = rememberChartSync(trendPoints)
+
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // Tap anywhere outside a chart clears the scrub selection.
+                .pointerInput(trendSync) { detectTapGestures { trendSync.selectedTimeMillis = null } },
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -163,15 +180,8 @@ fun DashboardScreen(
                 PeriodStatsCard(state = state, vehicle = vehicle)
             }
 
-            val trendPoints = state.trend
-                .mapNotNull { tp ->
-                    UnitConversions.fuelEconomyToDisplay(tp.litresPer100Km, system)
-                        ?.let { ChartPoint(tp.dateMillis, it.toFloat()) }
-                }
-                .sortedBy { it.timeMillis }
             if (trendPoints.size >= 2) {
                 item {
-                    val trendSync = rememberChartSync(trendPoints)
                     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
                             Text(
@@ -186,10 +196,13 @@ fun DashboardScreen(
                             TripChart(
                                 points = trendPoints,
                                 sync = trendSync,
-                                domainStartMillis = trendPoints.first().timeMillis,
-                                domainEndMillis = trendPoints.last().timeMillis,
+                                domainStartMillis = 0L,
+                                domainEndMillis = 2L * trendPoints.size,
                                 unit = UnitConversions.fuelEconomyUnit(system),
-                                timeLabel = { formatDate(it) },
+                                timeLabel = { synthetic ->
+                                    val i = ((synthetic - 1L) / 2L).toInt().coerceIn(0, trendVals.lastIndex)
+                                    formatDate(trendVals[i].first)
+                                },
                                 averageLine = true,
                                 trendLine = true,
                                 barChart = true,

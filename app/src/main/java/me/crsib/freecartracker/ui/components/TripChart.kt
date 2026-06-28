@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -124,6 +125,7 @@ fun TripChart(
     val tooltipText = MaterialTheme.colorScheme.inverseOnSurface
     val averageColor = MaterialTheme.colorScheme.onSurfaceVariant
     val trendColor = Color(0xFFEF6C00)
+    val barBorderColor = Color(0xFF0D3B79) // darker rim so adjacent bars read as distinct
     val measurer = rememberTextMeasurer()
 
     // Mean and least-squares fit (value = a + b·tRelative), computed over all points. The fit uses
@@ -150,25 +152,42 @@ fun TripChart(
             Modifier
                 .fillMaxWidth()
                 .height(140.dp)
+                // Taps: read the value at that x (and consume, so a tap on the chart doesn't bubble
+                // to the screen's tap-to-clear handler).
                 .pointerInput(points, domainStartMillis, domainEndMillis) {
-                    awaitEachGesture {
-                        val leftAxis = 44.dp.toPx()
-                        val plotW = (size.width - leftAxis).coerceAtLeast(1f)
-
-                        fun timeAt(x: Float): Long {
-                            val frac = (sync.pan + ((x - leftAxis) / plotW) / sync.scale).coerceIn(0f, 1f)
-                            return domainStartMillis + (frac * domainSpan).toLong()
+                    val leftAxis = 44.dp.toPx()
+                    val plotW = (size.width - leftAxis).coerceAtLeast(1f)
+                    detectTapGestures { offset ->
+                        if (offset.x >= leftAxis) {
+                            val frac = (sync.pan + ((offset.x - leftAxis) / plotW) / sync.scale).coerceIn(0f, 1f)
+                            sync.selectedTimeMillis = domainStartMillis + (frac * domainSpan).toLong()
                         }
+                    }
+                }
+                // Drags: a mostly-horizontal one finger scrubs (consumed); a mostly-vertical one is
+                // left for the surrounding scroll container; two fingers zoom/pan.
+                .pointerInput(points, domainStartMillis, domainEndMillis) {
+                    val leftAxis = 44.dp.toPx()
+                    val plotW = (size.width - leftAxis).coerceAtLeast(1f)
+                    val slop = viewConfiguration.touchSlop
 
+                    fun timeAt(x: Float): Long {
+                        val frac = (sync.pan + ((x - leftAxis) / plotW) / sync.scale).coerceIn(0f, 1f)
+                        return domainStartMillis + (frac * domainSpan).toLong()
+                    }
+
+                    awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        var multiTouch = false
-                        if (down.position.x >= leftAxis) sync.selectedTimeMillis = timeAt(down.position.x)
+                        val startX = down.position.x
+                        val startY = down.position.y
+                        // 0 = undecided, 1 = horizontal scrub, 2 = vertical (defer to scroll), 3 = pinch.
+                        var mode = 0
 
                         do {
                             val event = awaitPointerEvent(PointerEventPass.Main)
                             val pressed = event.changes.filter { it.pressed }
                             if (pressed.size >= 2) {
-                                multiTouch = true
+                                mode = 3
                                 sync.selectedTimeMillis = null
                                 val zoom = event.calculateZoom()
                                 val panChange = event.calculatePan().x
@@ -182,9 +201,16 @@ fun TripChart(
                                         .coerceIn(0f, 1f - 1f / newScale)
                                     event.changes.forEach { it.consume() }
                                 }
-                            } else if (pressed.size == 1 && !multiTouch) {
+                            } else if (pressed.size == 1 && mode != 3) {
                                 val c = pressed.first()
-                                if (c.position.x >= leftAxis) {
+                                if (mode == 0) {
+                                    val dx = c.position.x - startX
+                                    val dy = c.position.y - startY
+                                    if (abs(dx) > slop || abs(dy) > slop) {
+                                        mode = if (abs(dx) >= abs(dy)) 1 else 2
+                                    }
+                                }
+                                if (mode == 1 && c.position.x >= leftAxis) {
                                     sync.selectedTimeMillis = timeAt(c.position.x)
                                     c.consume()
                                 }
@@ -238,15 +264,15 @@ fun TripChart(
             if (barChart) {
                 val baselineY = yForValue(min)
                 val barW = ((plotW * scale) / points.size * 0.55f).coerceIn(4.dp.toPx(), 48.dp.toPx())
+                val borderW = 1.5.dp.toPx()
                 clipRect(plotLeft, plotTop, plotRight, plotBottom) {
                     for (i in firstIdx..lastIdx) {
                         val cx = xForTime(points[i].timeMillis)
                         val topY = yForValue(points[i].value)
-                        drawRect(
-                            color = lineColor,
-                            topLeft = Offset(cx - barW / 2f, minOf(topY, baselineY)),
-                            size = Size(barW, abs(baselineY - topY)),
-                        )
+                        val topLeft = Offset(cx - barW / 2f, minOf(topY, baselineY))
+                        val sizeRect = Size(barW, abs(baselineY - topY))
+                        drawRect(color = lineColor, topLeft = topLeft, size = sizeRect)
+                        drawRect(color = barBorderColor, topLeft = topLeft, size = sizeRect, style = Stroke(width = borderW))
                     }
                 }
             } else if (lastIdx > firstIdx) {
