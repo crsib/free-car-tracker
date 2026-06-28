@@ -67,6 +67,25 @@ class AdaptivePollScheduleTest {
     }
 
     @Test
+    fun disabledPidIsReprobedAfterInterval() {
+        val schedule = AdaptivePollSchedule(
+            fast = listOf(def("a", PollPriority.FAST), def("b", PollPriority.FAST)),
+            slow = emptyList(),
+            maxFailures = 3,
+            reprobeEveryCycles = 5,
+        )
+        repeat(3) { schedule.recordFailure("b") }
+        assertTrue("b" in schedule.disabledKeys)
+
+        // b stays out until the re-probe cycle...
+        repeat(4) { assertFalse("b" in schedule.nextBatch().map { it.key }) }
+        // ...then it's given another chance and is polled again.
+        val keys = schedule.nextBatch().map { it.key }
+        assertTrue("a" in keys && "b" in keys)
+        assertFalse("b" in schedule.disabledKeys)
+    }
+
+    @Test
     fun successResetsFailureCount() {
         val schedule = AdaptivePollSchedule(
             fast = listOf(def("a", PollPriority.FAST)),

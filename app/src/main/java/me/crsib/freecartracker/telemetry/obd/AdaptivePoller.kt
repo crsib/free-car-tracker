@@ -19,23 +19,33 @@ class ObdConnectionLostException(message: String) : IOException(message)
 /**
  * Decides which PIDs to query each cycle. FAST PIDs are read every cycle; SLOW PIDs are
  * round-robined a few per cycle so the FAST loop stays responsive on a low-throughput ELM327.
- * PIDs that fail repeatedly are disabled. Pure (no IO) so it is unit-testable.
+ * PIDs that fail repeatedly are disabled, but are re-probed every [reprobeEveryCycles] cycles so a
+ * transient glitch (or a recovered connection) doesn't permanently kill a metric — otherwise a
+ * degraded link can leave the session limping along on whichever PID happened to survive. Pure
+ * (no IO) so it is unit-testable.
  */
 class AdaptivePollSchedule(
     fast: List<PidDefinition>,
     slow: List<PidDefinition>,
     private val slowPerCycle: Int = 2,
     private val maxFailures: Int = 3,
+    private val reprobeEveryCycles: Int = 120,
 ) {
     private val fast = fast.toMutableList()
     private val slow = slow.toMutableList()
     private val failures = mutableMapOf<String, Int>()
     private val _disabled = mutableSetOf<String>()
+    private val disabledDefs = mutableListOf<PidDefinition>()
     private var slowCursor = 0
+    private var cycle = 0
 
     val disabledKeys: Set<String> get() = _disabled.toSet()
 
     fun nextBatch(): List<PidDefinition> {
+        cycle++
+        if (reprobeEveryCycles > 0 && disabledDefs.isNotEmpty() && cycle % reprobeEveryCycles == 0) {
+            reprobeDisabled()
+        }
         val batch = ArrayList<PidDefinition>(fast.size + slowPerCycle)
         batch.addAll(fast)
         if (slow.isNotEmpty()) {
@@ -59,8 +69,20 @@ class AdaptivePollSchedule(
 
     private fun disable(key: String) {
         _disabled += key
+        val def = fast.firstOrNull { it.key == key } ?: slow.firstOrNull { it.key == key }
+        if (def != null) disabledDefs += def
         fast.removeAll { it.key == key }
         slow.removeAll { it.key == key }
+    }
+
+    /** Give every disabled PID another chance: clear its failures and put it back in its tier. */
+    private fun reprobeDisabled() {
+        disabledDefs.forEach { def ->
+            failures.remove(def.key)
+            _disabled -= def.key
+            if (def.priority == PollPriority.FAST) fast += def else slow += def
+        }
+        disabledDefs.clear()
     }
 
     companion object {
