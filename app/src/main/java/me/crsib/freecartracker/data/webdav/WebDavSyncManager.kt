@@ -5,6 +5,7 @@ import me.crsib.freecartracker.data.AppDatabase
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.sync.GpxExporter
 import me.crsib.freecartracker.data.sync.LedgerDocument
+import me.crsib.freecartracker.data.sync.LedgerTombstone
 import me.crsib.freecartracker.data.sync.ObdCsvExporter
 import me.crsib.freecartracker.data.sync.SyncImporter
 import me.crsib.freecartracker.data.sync.TripFileManifest
@@ -104,16 +105,19 @@ class WebDavSyncManager(
         for (v in vehicles) {
             client.ensureCollection(config, WebDavPaths.vehicleDir(v.syncId)).getOrThrow()
             val remoteLedgerBytes = client.getBytes(config, WebDavPaths.ledgerJson(v.syncId)).getOrThrow()
-            val remoteClock = remoteLedgerBytes?.let {
-                runCatching { json.decodeFromString(LedgerDocument.serializer(), it.decodeToString()).exportedAt }
-                    .getOrDefault(0L)
-            } ?: -1L
+            val remoteDoc = remoteLedgerBytes?.let {
+                runCatching { json.decodeFromString(LedgerDocument.serializer(), it.decodeToString()) }.getOrNull()
+            }
+            val remoteClock = remoteDoc?.exportedAt ?: -1L
             // Push unless the remote ledger is strictly newer than anything we've reconciled
-            // (in which case pullPhase will import it). For the sole ledger editor this is always true.
+            // (in which case pullPhase will merge it). For the sole ledger editor this is always true.
             if (remoteClock <= syncState.ledgerClock(v.syncId)) {
                 if (remoteLedgerBytes != null) {
                     client.putBytes(config, WebDavPaths.ledgerBak(v.syncId), remoteLedgerBytes).getOrThrow()
                 }
+                // Fold any remote-only entries into the local ledger before overwriting the remote
+                // copy, so a push can never discard entries another device added concurrently.
+                if (remoteDoc != null) importer.mergeLedger(remoteDoc)
                 pushVehicle(config, v, now)
                 pushLedger(config, v, now)
                 syncState.setLedgerClock(v.syncId, now)
@@ -173,6 +177,8 @@ class WebDavSyncManager(
             fuelEntries = db.fuelEntryDao().getForVehicle(v.id),
             chargeEntries = db.chargeEntryDao().getForVehicle(v.id),
             expenses = db.expenseDao().getForVehicle(v.id),
+            deletedEntries = db.deletedLedgerEntryDao().getForVehicle(v.id)
+                .map { LedgerTombstone(it.syncId, it.deletedAtMillis) },
         )
         client.putBytes(
             config,
@@ -220,13 +226,13 @@ class WebDavSyncManager(
             if (local == null) {
                 importer.importVehicle(vehicleDoc)
                 remoteLedger?.let {
-                    importer.importLedger(it)
+                    importer.mergeLedger(it)
                     syncState.setLedgerClock(vSync, it.exportedAt)
                 }
                 report = report.copy(vehiclesPulled = report.vehiclesPulled + 1)
             } else if (remoteLedger != null && remoteLedger.exportedAt > syncState.ledgerClock(vSync)) {
                 importer.importVehicle(vehicleDoc)
-                importer.importLedger(remoteLedger)
+                importer.mergeLedger(remoteLedger)
                 syncState.setLedgerClock(vSync, remoteLedger.exportedAt)
                 report = report.copy(ledgersPulled = report.ledgersPulled + 1)
             }

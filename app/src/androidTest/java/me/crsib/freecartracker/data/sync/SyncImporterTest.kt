@@ -56,25 +56,76 @@ class SyncImporterTest {
     }
 
     @Test
-    fun importLedger_replacesPerCarRows() = runBlocking {
+    fun mergeLedger_addsRemoteAndKeepsLocalOnly() = runBlocking {
         importer.importVehicle(VehicleDocument(exportedAt = 1, vehicle = vehicle("v-1", "Car")))
         val localId = db.vehicleDao().findBySyncId("v-1")!!.id
 
-        val fuel = FuelEntry(
+        // A local-only entry that the remote ledger doesn't know about (the regression: it must survive).
+        db.fuelEntryDao().upsert(
+            FuelEntry(
+                vehicleId = localId, dateMillis = 50, odometerKm = 900.0, volumeL = 30.0,
+                totalCostMinor = 4000, currency = "USD", isFullTank = true,
+                syncId = "local-only", updatedAtMillis = 50,
+            ),
+        )
+
+        val remote = FuelEntry(
             vehicleId = 0, dateMillis = 100, odometerKm = 1000.0, volumeL = 40.0,
             totalCostMinor = 5000, currency = "USD", isFullTank = true,
+            syncId = "remote-1", updatedAtMillis = 100,
         )
-        val ok = importer.importLedger(
-            LedgerDocument(exportedAt = 2, vehicleSyncId = "v-1", fuelEntries = listOf(fuel)),
+        val ok = importer.mergeLedger(
+            LedgerDocument(exportedAt = 2, vehicleSyncId = "v-1", fuelEntries = listOf(remote)),
         )
         assertTrue(ok)
         val stored = db.fuelEntryDao().getForVehicle(localId)
-        assertEquals(1, stored.size)
-        assertEquals(localId, stored[0].vehicleId)
-        assertEquals(40.0, stored[0].volumeL, 0.0)
+        assertEquals(2, stored.size) // union: local-only kept, remote added
+        assertTrue(stored.any { it.syncId == "local-only" })
+        assertTrue(stored.any { it.syncId == "remote-1" && it.vehicleId == localId })
 
         // Missing vehicle -> no-op false.
-        assertFalse(importer.importLedger(LedgerDocument(exportedAt = 3, vehicleSyncId = "absent")))
+        assertFalse(importer.mergeLedger(LedgerDocument(exportedAt = 3, vehicleSyncId = "absent")))
+    }
+
+    @Test
+    fun mergeLedger_appliesTombstonesAndNewerEdits() = runBlocking {
+        importer.importVehicle(VehicleDocument(exportedAt = 1, vehicle = vehicle("v-1", "Car")))
+        val localId = db.vehicleDao().findBySyncId("v-1")!!.id
+
+        db.fuelEntryDao().upsert(
+            FuelEntry(
+                vehicleId = localId, dateMillis = 50, odometerKm = 900.0, volumeL = 30.0,
+                totalCostMinor = 4000, currency = "USD", isFullTank = true,
+                syncId = "doomed", updatedAtMillis = 50,
+            ),
+        )
+        db.fuelEntryDao().upsert(
+            FuelEntry(
+                vehicleId = localId, dateMillis = 60, odometerKm = 950.0, volumeL = 20.0,
+                totalCostMinor = 3000, currency = "USD", isFullTank = true,
+                syncId = "edited", updatedAtMillis = 60,
+            ),
+        )
+
+        importer.mergeLedger(
+            LedgerDocument(
+                exportedAt = 2, vehicleSyncId = "v-1",
+                fuelEntries = listOf(
+                    FuelEntry(
+                        vehicleId = 0, dateMillis = 60, odometerKm = 950.0, volumeL = 25.0,
+                        totalCostMinor = 3500, currency = "USD", isFullTank = true,
+                        syncId = "edited", updatedAtMillis = 200, // newer edit wins
+                    ),
+                ),
+                deletedEntries = listOf(LedgerTombstone(syncId = "doomed", deletedAtMillis = 100)),
+            ),
+        )
+
+        val stored = db.fuelEntryDao().getForVehicle(localId)
+        assertEquals(1, stored.size)
+        assertEquals("edited", stored[0].syncId)
+        assertEquals(25.0, stored[0].volumeL, 0.0) // remote edit applied
+        assertTrue(db.deletedLedgerEntryDao().isTombstoned("doomed"))
     }
 
     @Test

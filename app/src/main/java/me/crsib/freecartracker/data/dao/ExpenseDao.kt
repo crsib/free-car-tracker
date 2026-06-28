@@ -20,6 +20,9 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE id = :id")
     suspend fun getById(id: Long): Expense?
 
+    @Query("SELECT * FROM expenses WHERE syncId = :syncId")
+    suspend fun getBySyncId(syncId: String): Expense?
+
     @Query("SELECT MAX(odometerKm) FROM expenses WHERE vehicleId = :vehicleId")
     suspend fun maxOdometer(vehicleId: Long): Double?
 
@@ -46,4 +49,7 @@ interface ExpenseDao {
 
     @Query("DELETE FROM expenses WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM expenses WHERE syncId = :syncId")
+    suspend fun deleteBySyncId(syncId: String)
 }

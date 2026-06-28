@@ -40,6 +40,7 @@ class AppContainer(val appContext: Context) {
             chargeDao = database.chargeEntryDao(),
             expenseDao = database.expenseDao(),
             costDao = database.costDao(),
+            tombstoneDao = database.deletedLedgerEntryDao(),
             onLedgerChanged = { syncTrigger.requestSync() },
         )
     }

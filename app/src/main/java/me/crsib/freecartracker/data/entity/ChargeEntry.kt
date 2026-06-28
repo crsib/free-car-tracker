@@ -1,11 +1,13 @@
 package me.crsib.freecartracker.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 import me.crsib.freecartracker.domain.model.ChargeType
+import java.util.UUID
 
 @Entity(
     tableName = "charge_entries",
@@ -20,11 +22,12 @@ import me.crsib.freecartracker.domain.model.ChargeType
     indices = [
         Index("vehicleId", "dateMillis"),
         Index("vehicleId", "odometerKm"),
+        Index("syncId", unique = true),
     ],
 )
 @Serializable
 data class ChargeEntry(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey(autoGenerate = true) override val id: Long = 0,
     val vehicleId: Long,
     val dateMillis: Long,
     /** Optional odometer reading at the charge, in km. */
@@ -39,4 +42,6 @@ data class ChargeEntry(
     val endPct: Int? = null,
     val location: String? = null,
     val note: String? = null,
-)
+    @ColumnInfo(defaultValue = "") override val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") override val updatedAtMillis: Long = System.currentTimeMillis(),
+) : LedgerRow

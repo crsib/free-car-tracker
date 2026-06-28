@@ -9,11 +9,13 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import me.crsib.freecartracker.data.dao.ChargeEntryDao
 import me.crsib.freecartracker.data.dao.CostDao
+import me.crsib.freecartracker.data.dao.DeletedLedgerEntryDao
 import me.crsib.freecartracker.data.dao.ExpenseDao
 import me.crsib.freecartracker.data.dao.FuelEntryDao
 import me.crsib.freecartracker.data.dao.VehicleDao
 import me.crsib.freecartracker.data.entity.ChargeEntry
 import me.crsib.freecartracker.data.entity.CostView
+import me.crsib.freecartracker.data.entity.DeletedLedgerEntry
 import me.crsib.freecartracker.data.entity.Expense
 import me.crsib.freecartracker.data.entity.FuelEntry
 import me.crsib.freecartracker.data.entity.Vehicle
@@ -42,9 +44,10 @@ import me.crsib.freecartracker.telemetry.data.entity.Trip
         ObdExtendedSample::class,
         DtcRecord::class,
         DeletedTrip::class,
+        DeletedLedgerEntry::class,
     ],
     views = [CostView::class],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -60,6 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun obdExtendedSampleDao(): ObdExtendedSampleDao
     abstract fun dtcDao(): DtcDao
     abstract fun deletedTripDao(): DeletedTripDao
+    abstract fun deletedLedgerEntryDao(): DeletedLedgerEntryDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
@@ -219,9 +223,48 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7 gives fuel/charge/expense entries a stable cross-device [syncId] and a per-row
+         * [updatedAtMillis] clock so the WebDAV ledger can be *merged* by identity instead of
+         * replaced wholesale (which silently dropped entries added on another device). Also adds the
+         * `deleted_ledger_entries` tombstone table so deletions propagate. Existing rows get distinct
+         * UUIDs and `updatedAtMillis = dateMillis` (a sane last-write proxy for pre-existing data).
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (table in listOf("fuel_entries", "charge_entries", "expenses")) {
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `syncId` TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE `$table` ADD COLUMN `updatedAtMillis` INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL(ledgerUuidBackfillSql(table))
+                    db.execSQL("UPDATE `$table` SET `updatedAtMillis` = `dateMillis`")
+                    db.execSQL(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS `index_${table}_syncId` ON `$table` (`syncId`)",
+                    )
+                }
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `deleted_ledger_entries` (" +
+                        "`syncId` TEXT NOT NULL, `vehicleId` INTEGER NOT NULL, " +
+                        "`deletedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`syncId`))",
+                )
+            }
+
+            /** Canonical 8-4-4-4-12 UUIDv4 string assembled from random bytes, per row. */
+            private fun ledgerUuidBackfillSql(table: String): String =
+                "UPDATE `$table` SET `syncId` = " +
+                    "lower(hex(randomblob(4))) || '-' || " +
+                    "lower(hex(randomblob(2))) || '-4' || " +
+                    "substr(lower(hex(randomblob(2))), 2) || '-' || " +
+                    "substr('89ab', abs(random()) % 4 + 1, 1) || " +
+                    "substr(lower(hex(randomblob(2))), 2) || '-' || " +
+                    "lower(hex(randomblob(6)))"
+        }
+
         /** All migrations, in order. Exposed so the migration test can validate them. */
         val ALL_MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            arrayOf(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                MIGRATION_6_7,
+            )
 
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {

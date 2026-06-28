@@ -20,6 +20,9 @@ interface ChargeEntryDao {
     @Query("SELECT * FROM charge_entries WHERE id = :id")
     suspend fun getById(id: Long): ChargeEntry?
 
+    @Query("SELECT * FROM charge_entries WHERE syncId = :syncId")
+    suspend fun getBySyncId(syncId: String): ChargeEntry?
+
     @Query("SELECT MAX(odometerKm) FROM charge_entries WHERE vehicleId = :vehicleId")
     suspend fun maxOdometer(vehicleId: Long): Double?
 
@@ -49,4 +52,7 @@ interface ChargeEntryDao {
 
     @Query("DELETE FROM charge_entries WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM charge_entries WHERE syncId = :syncId")
+    suspend fun deleteBySyncId(syncId: String)
 }

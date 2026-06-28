@@ -1,5 +1,6 @@
 package me.crsib.freecartracker.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -7,6 +8,7 @@ import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
 import me.crsib.freecartracker.domain.model.ExpenseCategory
 import me.crsib.freecartracker.domain.model.Recurrence
+import java.util.UUID
 
 @Entity(
     tableName = "expenses",
@@ -21,11 +23,12 @@ import me.crsib.freecartracker.domain.model.Recurrence
     indices = [
         Index("vehicleId", "dateMillis"),
         Index("vehicleId", "category"),
+        Index("syncId", unique = true),
     ],
 )
 @Serializable
 data class Expense(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey(autoGenerate = true) override val id: Long = 0,
     val vehicleId: Long,
     val dateMillis: Long,
     val odometerKm: Double? = null,
@@ -41,4 +44,6 @@ data class Expense(
     val nextDueDateMillis: Long? = null,
     /** Optional reminder: next due at odometer (km). */
     val nextDueOdometerKm: Double? = null,
-)
+    @ColumnInfo(defaultValue = "") override val syncId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(defaultValue = "0") override val updatedAtMillis: Long = System.currentTimeMillis(),
+) : LedgerRow

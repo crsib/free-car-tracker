@@ -22,6 +22,7 @@ import me.crsib.freecartracker.domain.model.ExpenseCategory
 import me.crsib.freecartracker.domain.model.FuelType
 import me.crsib.freecartracker.domain.model.Recurrence
 import java.math.BigDecimal
+import java.util.UUID
 
 /** The three linked money fields on the fuel/charge forms; editing two derives the third. */
 enum class CostField { QUANTITY, PRICE, TOTAL }
@@ -33,6 +34,8 @@ data class EntryFormState(
     val allowedKinds: List<EntryKind> = emptyList(),
     val kind: EntryKind = EntryKind.EXPENSE,
     val editId: Long? = null,
+    /** Cross-device id of the entry being edited; blank when creating (a fresh one is generated). */
+    val syncId: String = "",
     val dateMillis: Long = 0,
     val odometer: String = "",
     /** Highest odometer reading on record (canonical km), shown as a hint. Null when none yet. */
@@ -153,6 +156,7 @@ class EntryEditViewModel(
                 EntryKind.FUEL -> entryRepo.getFuel(editId)?.let { e ->
                     s.copy(
                         editId = e.id,
+                        syncId = e.syncId,
                         dateMillis = e.dateMillis,
                         odometer = num(UnitConversions.kmToDisplay(e.odometerKm, system)),
                         volume = num(UnitConversions.litresToDisplay(e.volumeL, system)),
@@ -166,6 +170,7 @@ class EntryEditViewModel(
                 EntryKind.CHARGE -> entryRepo.getCharge(editId)?.let { e ->
                     s.copy(
                         editId = e.id,
+                        syncId = e.syncId,
                         dateMillis = e.dateMillis,
                         odometer = e.odometerKm?.let { num(UnitConversions.kmToDisplay(it, system)) } ?: "",
                         energyKwh = num(e.energyKwh),
@@ -180,6 +185,7 @@ class EntryEditViewModel(
                 EntryKind.EXPENSE -> entryRepo.getExpense(editId)?.let { e ->
                     s.copy(
                         editId = e.id,
+                        syncId = e.syncId,
                         dateMillis = e.dateMillis,
                         odometer = e.odometerKm?.let { num(UnitConversions.kmToDisplay(it, system)) } ?: "",
                         totalCost = money(e.totalCostMinor, vehicle.currency),
@@ -239,6 +245,9 @@ class EntryEditViewModel(
         val currency = vehicle.currency
         val costMinor = Money.majorToMinor(s.totalCost.toBigDecimal(), currency)
         val odoKm = s.odometer.toDoubleOrNull()?.let { UnitConversions.displayToKm(it, system) }
+        // Keep the entry's cross-device id stable across edits; new entries get a fresh one.
+        val syncId = s.syncId.ifBlank { UUID.randomUUID().toString() }
+        val updatedAt = System.currentTimeMillis()
 
         when (s.kind) {
             EntryKind.FUEL -> entryRepo.saveFuel(
@@ -254,6 +263,8 @@ class EntryEditViewModel(
                     fuelType = s.fuelType,
                     station = s.station.trim().ifBlank { null },
                     note = s.note.trim().ifBlank { null },
+                    syncId = syncId,
+                    updatedAtMillis = updatedAt,
                 ),
             )
             EntryKind.CHARGE -> entryRepo.saveCharge(
@@ -270,6 +281,8 @@ class EntryEditViewModel(
                     endPct = s.endPct.toIntOrNull(),
                     location = s.location.trim().ifBlank { null },
                     note = s.note.trim().ifBlank { null },
+                    syncId = syncId,
+                    updatedAtMillis = updatedAt,
                 ),
             )
             EntryKind.EXPENSE -> entryRepo.saveExpense(
@@ -285,6 +298,8 @@ class EntryEditViewModel(
                     description = s.description.trim().ifBlank { null },
                     recurrence = s.recurrence,
                     recurrenceEndMillis = s.recurrenceEndMillis.takeIf { s.recurrence != Recurrence.NONE },
+                    syncId = syncId,
+                    updatedAtMillis = updatedAt,
                 ),
             )
         }

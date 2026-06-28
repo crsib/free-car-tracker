@@ -26,8 +26,8 @@ class MigrationTest {
     @Test
     fun migrateAll_fromV1() {
         helper.createDatabase(TEST_DB, 1).close()
-        // Validate the full chain (1 -> 2 -> 3 -> 4 -> 5 -> 6) against the exported v6 schema.
-        helper.runMigrationsAndValidate(TEST_DB, 6, true, *AppDatabase.ALL_MIGRATIONS)
+        // Validate the full chain (1 -> 2 -> ... -> 7) against the exported v7 schema.
+        helper.runMigrationsAndValidate(TEST_DB, 7, true, *AppDatabase.ALL_MIGRATIONS)
     }
 
     @Test
@@ -40,6 +40,40 @@ class MigrationTest {
     fun migrate5To6_addsDeletedTripsTable() {
         helper.createDatabase(TEST_DB, 5).close()
         helper.runMigrationsAndValidate(TEST_DB, 6, true, *AppDatabase.ALL_MIGRATIONS)
+    }
+
+    @Test
+    fun migrate6To7_backfillsDistinctLedgerSyncIds() {
+        // Seed a vehicle and one entry of each type at v6 so the syncId backfill has rows.
+        helper.createDatabase(TEST_DB, 6).apply {
+            execSQL(
+                "INSERT INTO vehicles (id, name, powertrain, unitSystem, currency, " +
+                    "initialOdometerKm, isArchived, createdAt, syncId) VALUES " +
+                    "(1, 'A', 'ICE', 'METRIC', 'USD', 0, 0, 0, 'veh-1')",
+            )
+            execSQL(
+                "INSERT INTO fuel_entries (id, vehicleId, dateMillis, odometerKm, volumeL, " +
+                    "totalCostMinor, currency, isFullTank) VALUES " +
+                    "(1, 1, 100, 1000.0, 40.0, 5000, 'USD', 1), " +
+                    "(2, 1, 200, 1200.0, 38.0, 4800, 'USD', 1)",
+            )
+            execSQL(
+                "INSERT INTO charge_entries (id, vehicleId, dateMillis, energyKwh, " +
+                    "totalCostMinor, currency, chargeType) VALUES " +
+                    "(1, 1, 300, 50.0, 2000, 'USD', 'DC')",
+            )
+            execSQL(
+                "INSERT INTO expenses (id, vehicleId, dateMillis, category, totalCostMinor, " +
+                    "currency, recurrence) VALUES (1, 1, 400, 'SERVICE', 9000, 'USD', 'NONE')",
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(TEST_DB, 7, true, *AppDatabase.ALL_MIGRATIONS)
+
+        assertDistinctNonEmpty(db, "fuel_entries", expected = 2)
+        assertDistinctNonEmpty(db, "charge_entries", expected = 1)
+        assertDistinctNonEmpty(db, "expenses", expected = 1)
     }
 
     @Test

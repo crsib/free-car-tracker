@@ -16,15 +16,28 @@ data class VehicleDocument(
     val vehicle: Vehicle,
 )
 
-/** `ledger.json` — one car's fuel/charge/expense snapshot, with an LWW clock. */
+/** A deleted ledger entry carried in `ledger.json` so the deletion propagates across devices. */
+@Serializable
+data class LedgerTombstone(
+    val syncId: String,
+    val deletedAtMillis: Long,
+)
+
+/**
+ * `ledger.json` — one car's fuel/charge/expense snapshot. [exportedAt] is a coarse write clock;
+ * actual conflict resolution is per-entry by `syncId` + `updatedAtMillis`, with [deletedEntries]
+ * carrying tombstones so deletions aren't undone by a stale peer. `schemaVersion` 2 is the
+ * mergeable format (entries carry a `syncId`); version 1 is the legacy whole-document snapshot.
+ */
 @Serializable
 data class LedgerDocument(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 2,
     val exportedAt: Long,
     val vehicleSyncId: String,
     val fuelEntries: List<FuelEntry> = emptyList(),
     val chargeEntries: List<ChargeEntry> = emptyList(),
     val expenses: List<Expense> = emptyList(),
+    val deletedEntries: List<LedgerTombstone> = emptyList(),
 )
 
 /** Names + counts of a trip's side files, so a reader knows what to fetch and can verify. */
