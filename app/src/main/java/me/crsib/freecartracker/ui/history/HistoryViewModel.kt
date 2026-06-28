@@ -23,12 +23,21 @@ import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatNumber
 import me.crsib.freecartracker.ui.util.label
 
+/** Which icon a [HistoryStat] shows; mapped to an actual vector in the UI layer. */
+enum class StatIcon { VOLUME, ENERGY, ODOMETER, FULL, CONSUMPTION, LOCATION }
+
+/** One labelled stat on a history card: an icon and a short value kept on a single line. */
+data class HistoryStat(val icon: StatIcon, val text: String)
+
 data class HistoryItem(
     val kind: EntryKind,
     val id: Long,
     val dateMillis: Long,
     val title: String,
+    /** Free-text secondary line (used for expenses). */
     val subtitle: String,
+    /** Icon+value chips (used for fuel/charge so values never wrap mid-token). */
+    val stats: List<HistoryStat>,
     val amountMinor: Long,
     val currency: String,
     val search: String,
@@ -83,16 +92,22 @@ class HistoryViewModel(
                         fuel.forEach { e ->
                             val odo = formatNumber(UnitConversions.kmToDisplay(e.odometerKm, system), 0)
                             val vol = formatNumber(UnitConversions.litresToDisplay(e.volumeL, system), 1)
-                            val eco = fuelEcoByOdo[e.odometerKm]
-                                ?.let { UnitConversions.fuelEconomyToDisplay(it, system) }
-                                ?.let { " · ${formatNumber(it, 1)} $ecoUnit" } ?: ""
+                            val stats = buildList {
+                                add(HistoryStat(StatIcon.VOLUME, "$vol $vUnit"))
+                                add(HistoryStat(StatIcon.ODOMETER, "$odo $dUnit"))
+                                if (e.isFullTank) add(HistoryStat(StatIcon.FULL, "full"))
+                                fuelEcoByOdo[e.odometerKm]
+                                    ?.let { UnitConversions.fuelEconomyToDisplay(it, system) }
+                                    ?.let { add(HistoryStat(StatIcon.CONSUMPTION, "${formatNumber(it, 1)} $ecoUnit")) }
+                            }
                             add(
                                 HistoryItem(
                                     kind = EntryKind.FUEL,
                                     id = e.id,
                                     dateMillis = e.dateMillis,
                                     title = "Fuel",
-                                    subtitle = "$vol $vUnit · $odo $dUnit" + (if (e.isFullTank) " · full" else "") + eco,
+                                    subtitle = "",
+                                    stats = stats,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "fuel ${e.station.orEmpty()} ${e.note.orEmpty()}",
@@ -100,17 +115,21 @@ class HistoryViewModel(
                             )
                         }
                         charge.forEach { e ->
-                            val eco = e.odometerKm?.let { chargeEcoByOdo[it] }
-                                ?.let { UnitConversions.electricEconomyToDisplay(it, system) }
-                                ?.let { " · ${formatNumber(it, 1)} $elUnit" } ?: ""
+                            val stats = buildList {
+                                add(HistoryStat(StatIcon.ENERGY, "${formatNumber(e.energyKwh, 1)} kWh"))
+                                e.location?.takeIf { it.isNotBlank() }?.let { add(HistoryStat(StatIcon.LOCATION, it)) }
+                                e.odometerKm?.let { chargeEcoByOdo[it] }
+                                    ?.let { UnitConversions.electricEconomyToDisplay(it, system) }
+                                    ?.let { add(HistoryStat(StatIcon.CONSUMPTION, "${formatNumber(it, 1)} $elUnit")) }
+                            }
                             add(
                                 HistoryItem(
                                     kind = EntryKind.CHARGE,
                                     id = e.id,
                                     dateMillis = e.dateMillis,
                                     title = "Charging",
-                                    subtitle = "${formatNumber(e.energyKwh, 1)} kWh" +
-                                        (e.location?.let { " · $it" } ?: "") + eco,
+                                    subtitle = "",
+                                    stats = stats,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "charge ${e.location.orEmpty()} ${e.note.orEmpty()}",
@@ -131,6 +150,7 @@ class HistoryViewModel(
                                         e.vendor,
                                         e.description,
                                     ).joinToString(" · "),
+                                    stats = emptyList(),
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "${e.category.label()} ${e.vendor.orEmpty()} ${e.description.orEmpty()}",

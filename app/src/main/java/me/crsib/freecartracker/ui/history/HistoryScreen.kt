@@ -3,13 +3,22 @@ package me.crsib.freecartracker.ui.history
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -29,7 +38,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.domain.model.EntryKind
@@ -44,6 +55,38 @@ private fun EntryKind.chip() = when (this) {
     EntryKind.FUEL -> "Fuel"
     EntryKind.CHARGE -> "Charge"
     EntryKind.EXPENSE -> "Expense"
+}
+
+private fun StatIcon.vector(): ImageVector = when (this) {
+    StatIcon.VOLUME -> Icons.Filled.WaterDrop
+    StatIcon.ENERGY -> Icons.Filled.Bolt
+    StatIcon.ODOMETER -> Icons.Filled.Straighten
+    StatIcon.FULL -> Icons.Filled.Check
+    StatIcon.CONSUMPTION -> Icons.Filled.Speed
+    StatIcon.LOCATION -> Icons.Filled.Place
+}
+
+@Composable
+private fun StatChip(stat: HistoryStat) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Icon(
+            stat.icon.vector(),
+            contentDescription = null,
+            modifier = Modifier.size(13.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stat.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -136,6 +179,7 @@ fun HistoryScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
@@ -152,7 +196,17 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
             )
             Column(Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.Medium)
-                if (item.subtitle.isNotBlank()) {
+                if (item.stats.isNotEmpty()) {
+                    // Each stat is an atomic icon+value, so whole stats wrap to the next line
+                    // instead of breaking a value mid-token (e.g. "2 kWh/" / "100km").
+                    FlowRow(
+                        modifier = Modifier.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        item.stats.forEach { StatChip(it) }
+                    }
+                } else if (item.subtitle.isNotBlank()) {
                     Text(item.subtitle, style = MaterialTheme.typography.bodySmall)
                 }
                 Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
