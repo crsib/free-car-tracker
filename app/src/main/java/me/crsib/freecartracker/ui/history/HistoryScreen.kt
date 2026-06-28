@@ -227,11 +227,14 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                item.kind.icon(),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
+            // The leading icon doubles as the fill-level cue for fuel/charge (full/partial tank,
+            // battery level), colour-coded; expenses keep their category icon.
+            val badge = item.amountBadge
+            if (badge != null) {
+                Icon(badge.vector(), contentDescription = badge.description(), tint = badge.tint())
+            } else {
+                Icon(item.kind.icon(), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
             Column(Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.Medium)
                 if (item.stats.isNotEmpty()) {
@@ -249,17 +252,7 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
                 }
                 Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item.amountBadge?.let { badge ->
-                    Icon(
-                        badge.vector(),
-                        contentDescription = badge.description(),
-                        modifier = Modifier.size(20.dp),
-                        tint = badge.tint(),
-                    )
-                }
-                Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
-            }
+            Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
             IconButton(onClick = { menu = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "More")
             }
