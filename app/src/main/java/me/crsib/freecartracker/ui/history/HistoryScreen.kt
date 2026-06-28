@@ -12,13 +12,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Battery1Bar
+import androidx.compose.material.icons.filled.Battery2Bar
+import androidx.compose.material.icons.filled.Battery4Bar
+import androidx.compose.material.icons.filled.Battery6Bar
+import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material.icons.outlined.LocalGasStation
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -61,9 +68,26 @@ private fun StatIcon.vector(): ImageVector = when (this) {
     StatIcon.VOLUME -> Icons.Filled.WaterDrop
     StatIcon.ENERGY -> Icons.Filled.Bolt
     StatIcon.ODOMETER -> Icons.Filled.Straighten
-    StatIcon.FULL -> Icons.Filled.Check
     StatIcon.CONSUMPTION -> Icons.Filled.Speed
     StatIcon.LOCATION -> Icons.Filled.Place
+}
+
+private fun AmountBadge.vector(): ImageVector = when (this) {
+    AmountBadge.TANK_FULL -> Icons.Filled.LocalGasStation
+    AmountBadge.TANK_PARTIAL -> Icons.Outlined.LocalGasStation
+    AmountBadge.BATTERY_FULL -> Icons.Filled.BatteryFull
+    AmountBadge.BATTERY_HIGH -> Icons.Filled.Battery6Bar
+    AmountBadge.BATTERY_MID -> Icons.Filled.Battery4Bar
+    AmountBadge.BATTERY_LOW -> Icons.Filled.Battery2Bar
+    AmountBadge.BATTERY_EMPTY -> Icons.Filled.Battery1Bar
+    AmountBadge.BATTERY_UNKNOWN -> Icons.Filled.BatteryStd
+}
+
+private fun AmountBadge.description(): String = when (this) {
+    AmountBadge.TANK_FULL -> "Full tank"
+    AmountBadge.TANK_PARTIAL -> "Partial fill"
+    AmountBadge.BATTERY_UNKNOWN -> "Charge"
+    else -> "Battery level"
 }
 
 @Composable
@@ -211,7 +235,17 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit, onDelete: () -> U
                 }
                 Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
             }
-            Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item.amountBadge?.let { badge ->
+                    Icon(
+                        badge.vector(),
+                        contentDescription = badge.description(),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
+            }
             IconButton(onClick = { menu = true }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "More")
             }

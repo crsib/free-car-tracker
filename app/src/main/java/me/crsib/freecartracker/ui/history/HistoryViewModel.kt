@@ -24,10 +24,25 @@ import me.crsib.freecartracker.ui.util.formatNumber
 import me.crsib.freecartracker.ui.util.label
 
 /** Which icon a [HistoryStat] shows; mapped to an actual vector in the UI layer. */
-enum class StatIcon { VOLUME, ENERGY, ODOMETER, FULL, CONSUMPTION, LOCATION }
+enum class StatIcon { VOLUME, ENERGY, ODOMETER, CONSUMPTION, LOCATION }
 
 /** One labelled stat on a history card: an icon and a short value kept on a single line. */
 data class HistoryStat(val icon: StatIcon, val text: String)
+
+/**
+ * A fill-level cue shown next to the amount: a full/partial fuel tank, or a battery level from
+ * the charge's end %. Mapped to an actual vector in the UI layer.
+ */
+enum class AmountBadge {
+    TANK_FULL,
+    TANK_PARTIAL,
+    BATTERY_FULL,
+    BATTERY_HIGH,
+    BATTERY_MID,
+    BATTERY_LOW,
+    BATTERY_EMPTY,
+    BATTERY_UNKNOWN,
+}
 
 data class HistoryItem(
     val kind: EntryKind,
@@ -38,10 +53,22 @@ data class HistoryItem(
     val subtitle: String,
     /** Icon+value chips (used for fuel/charge so values never wrap mid-token). */
     val stats: List<HistoryStat>,
+    /** Fill-level cue shown by the amount (tank fullness / battery level), or null. */
+    val amountBadge: AmountBadge?,
     val amountMinor: Long,
     val currency: String,
     val search: String,
 )
+
+/** Battery level bucket from a charge's end %, for the [AmountBadge] shown by the amount. */
+private fun batteryBadge(endPct: Int?): AmountBadge = when {
+    endPct == null -> AmountBadge.BATTERY_UNKNOWN
+    endPct >= 90 -> AmountBadge.BATTERY_FULL
+    endPct >= 65 -> AmountBadge.BATTERY_HIGH
+    endPct >= 40 -> AmountBadge.BATTERY_MID
+    endPct >= 15 -> AmountBadge.BATTERY_LOW
+    else -> AmountBadge.BATTERY_EMPTY
+}
 
 data class HistoryUiState(
     val loading: Boolean = true,
@@ -95,7 +122,6 @@ class HistoryViewModel(
                             val stats = buildList {
                                 add(HistoryStat(StatIcon.VOLUME, "$vol $vUnit"))
                                 add(HistoryStat(StatIcon.ODOMETER, "$odo $dUnit"))
-                                if (e.isFullTank) add(HistoryStat(StatIcon.FULL, "full"))
                                 fuelEcoByOdo[e.odometerKm]
                                     ?.let { UnitConversions.fuelEconomyToDisplay(it, system) }
                                     ?.let { add(HistoryStat(StatIcon.CONSUMPTION, "${formatNumber(it, 1)} $ecoUnit")) }
@@ -108,6 +134,7 @@ class HistoryViewModel(
                                     title = "Fuel",
                                     subtitle = "",
                                     stats = stats,
+                                    amountBadge = if (e.isFullTank) AmountBadge.TANK_FULL else AmountBadge.TANK_PARTIAL,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "fuel ${e.station.orEmpty()} ${e.note.orEmpty()}",
@@ -130,6 +157,7 @@ class HistoryViewModel(
                                     title = "Charging",
                                     subtitle = "",
                                     stats = stats,
+                                    amountBadge = batteryBadge(e.endPct),
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "charge ${e.location.orEmpty()} ${e.note.orEmpty()}",
@@ -151,6 +179,7 @@ class HistoryViewModel(
                                         e.description,
                                     ).joinToString(" · "),
                                     stats = emptyList(),
+                                    amountBadge = null,
                                     amountMinor = e.totalCostMinor,
                                     currency = e.currency,
                                     search = "${e.category.label()} ${e.vendor.orEmpty()} ${e.description.orEmpty()}",
