@@ -1,5 +1,6 @@
 package me.crsib.freecartracker.telemetry.obd
 
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -8,6 +9,8 @@ import me.crsib.freecartracker.telemetry.obd.pid.PidDefinition
 import me.crsib.freecartracker.telemetry.obd.pid.PollPriority
 import java.io.IOException
 import kotlin.coroutines.coroutineContext
+
+private const val TAG = "ObdPoll"
 
 /**
  * Thrown when the adapter stops answering entirely (every PID disabled, or a sustained run of
@@ -40,6 +43,9 @@ class AdaptivePollSchedule(
     private var cycle = 0
 
     val disabledKeys: Set<String> get() = _disabled.toSet()
+
+    /** Keys still being polled (FAST + SLOW), for diagnostics. */
+    val activeKeys: Set<String> get() = (fast.asSequence() + slow.asSequence()).map { it.key }.toSet()
 
     fun nextBatch(): List<PidDefinition> {
         cycle++
@@ -111,10 +117,15 @@ class AdaptivePoller(
 ) {
     fun readings(): Flow<List<ObdReading>> = flow {
         var deadCycles = 0
+        var cycle = 0
+        var prevDisabled = emptySet<String>()
+        val producedSinceHealth = HashSet<String>()
         while (coroutineContext.isActive) {
+            cycle++
             val batch = schedule.nextBatch()
             // Every PID has been disabled — the adapter/ECU has stopped responding entirely.
             if (batch.isEmpty()) {
+                Log.w(TAG, "all PIDs disabled after repeated failures — treating as connection lost")
                 throw ObdConnectionLostException("all PIDs disabled after repeated failures")
             }
             val out = ArrayList<ObdReading>(batch.size)
@@ -125,12 +136,36 @@ class AdaptivePoller(
                 } else {
                     schedule.recordSuccess(def.key)
                     out += readings
+                    readings.forEach { producedSinceHealth += it.key }
                 }
             }
+
+            // Log when a metric drops out (disabled) or comes back (re-probed) — the trail for a
+            // session that ends up stuck on one PID.
+            val nowDisabled = schedule.disabledKeys
+            (nowDisabled - prevDisabled).takeIf { it.isNotEmpty() }?.let {
+                Log.w(TAG, "PID(s) disabled after repeated failures: ${it.sorted()}; still active: ${schedule.activeKeys.sorted()}")
+            }
+            (prevDisabled - nowDisabled).takeIf { it.isNotEmpty() }?.let {
+                Log.i(TAG, "re-probing previously disabled PID(s): ${it.sorted()}")
+            }
+            prevDisabled = nowDisabled
+
+            // Periodic health snapshot: which PIDs actually produced data, and what's disabled.
+            if (cycle % HEALTH_EVERY_CYCLES == 0) {
+                Log.i(
+                    TAG,
+                    "health cycle=$cycle: produced=${producedSinceHealth.sorted()}; " +
+                        "active=${schedule.activeKeys.size}; disabled=${nowDisabled.sorted()}; deadCycles=$deadCycles",
+                )
+                producedSinceHealth.clear()
+            }
+
             // A run of fully-empty cycles means the transport dropped (every query throws and is
             // mapped to null). Surface it so the caller can reconnect instead of spinning forever.
             if (out.isEmpty()) {
                 if (++deadCycles >= maxDeadCycles) {
+                    Log.w(TAG, "no readings for $deadCycles cycles — treating as connection lost")
                     throw ObdConnectionLostException("no readings for $deadCycles cycles")
                 }
             } else {
@@ -139,5 +174,9 @@ class AdaptivePoller(
             emit(out)
             delay(cycleDelayMs)
         }
+    }
+
+    private companion object {
+        const val HEALTH_EVERY_CYCLES = 100
     }
 }

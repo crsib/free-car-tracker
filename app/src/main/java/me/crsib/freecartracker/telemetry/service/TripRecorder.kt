@@ -1,5 +1,6 @@
 package me.crsib.freecartracker.telemetry.service
 
+import android.util.Log
 import me.crsib.freecartracker.data.repository.VehicleRepository
 import me.crsib.freecartracker.domain.model.ObdTransportKind
 import me.crsib.freecartracker.domain.model.TripStatus
@@ -178,6 +179,7 @@ class TripRecorder(
                         def.command.pid.uppercase() in supported
                 }
                 val poller = AdaptivePoller(session, AdaptivePollSchedule.from(defs))
+                Log.i(TAG, "OBD connected (${config.kind}); supported=${supported.size}; polling ${defs.size}: ${defs.map { it.key }}")
                 _recordingState.value = RecordingState.RECORDING
                 _liveState.update { it.copy(obdConnected = true) }
                 obdLostSince = null
@@ -186,7 +188,8 @@ class TripRecorder(
             } catch (c: CancellationException) {
                 runCatching { transport?.close() }
                 throw c
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.w(TAG, "OBD session ended; reconnecting in ${backoffMs}ms (${e.javaClass.simpleName}: ${e.message})")
                 _recordingState.value = RecordingState.RECONNECTING
                 _liveState.update { it.copy(obdConnected = false) }
                 if (obdLostSince == null) obdLostSince = clock()
@@ -424,6 +427,7 @@ class TripRecorder(
     }
 
     private companion object {
+        const val TAG = "TripRecorder"
         const val GPS_INTERVAL_MS = 1000L
         const val FLUSH_INTERVAL_MS = 2000L
         const val INITIAL_BACKOFF_MS = 1000L
