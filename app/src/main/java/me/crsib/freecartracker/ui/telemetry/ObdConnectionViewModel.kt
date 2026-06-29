@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.repository.VehicleRepository
 import me.crsib.freecartracker.domain.model.ObdTransportKind
+import me.crsib.freecartracker.telemetry.DiagLog
 import me.crsib.freecartracker.telemetry.companion.ObdCompanionManager
 import me.crsib.freecartracker.telemetry.data.TelemetrySettingsStore
 import me.crsib.freecartracker.telemetry.location.LocationSourceFactory
@@ -215,7 +216,7 @@ class ObdConnectionViewModel(
     private fun finishEnable(address: String) {
         settings.autoStartEnabled = true
         companion.startObserving(address)
-        android.util.Log.i("ObdAutoStart", "finishEnable: associated + observing $address")
+        DiagLog.i("ObdAutoStart", "finishEnable: associated + observing $address")
         _state.update { it.copy(autoStartEnabled = true, autoStartError = null) }
     }
 

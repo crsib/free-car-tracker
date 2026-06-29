@@ -2,10 +2,13 @@ package me.crsib.freecartracker.telemetry.companion
 
 import android.companion.AssociationInfo
 import android.companion.CompanionDeviceService
-import android.util.Log
+import android.companion.DevicePresenceEvent
+import android.os.Build
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import me.crsib.freecartracker.CarTrackerApp
+import me.crsib.freecartracker.telemetry.DiagLog
 import me.crsib.freecartracker.telemetry.service.TelemetryService
 
 /**
@@ -16,19 +19,50 @@ import me.crsib.freecartracker.telemetry.service.TelemetryService
  * The presence notification grants a short window to start a foreground service from the
  * background; the companion permission REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND
  * makes that explicit on API 34+.
+ *
+ * Two callback paths, matching the two observation APIs in [ObdCompanionManager]:
+ * - API 36+ observes via ObservingDevicePresenceRequest, which delivers [onDevicePresenceEvent]
+ *   (the deprecated [onDeviceAppeared]/[onDeviceDisappeared] are NOT called on that path).
+ * - Pre-36 observes via the legacy String API, which delivers [onDeviceAppeared]/[onDeviceDisappeared].
  */
 class ObdCompanionService : CompanionDeviceService() {
 
     private val container get() = (application as CarTrackerApp).container
 
+    /** API 36+ presence path (request-based observation). */
+    @RequiresApi(Build.VERSION_CODES.BAKLAVA)
+    override fun onDevicePresenceEvent(event: DevicePresenceEvent) {
+        DiagLog.i(TAG, "onDevicePresenceEvent: event=${event.event} assoc=${event.associationId}")
+        when (event.event) {
+            DevicePresenceEvent.EVENT_BT_CONNECTED,
+            DevicePresenceEvent.EVENT_BLE_APPEARED,
+            DevicePresenceEvent.EVENT_SELF_MANAGED_APPEARED -> onPresenceGained()
+
+            DevicePresenceEvent.EVENT_BT_DISCONNECTED,
+            DevicePresenceEvent.EVENT_BLE_DISAPPEARED,
+            DevicePresenceEvent.EVENT_SELF_MANAGED_DISAPPEARED -> onPresenceLost()
+        }
+    }
+
+    /** Legacy presence path (pre-36 String-based observation). */
+    @Suppress("OVERRIDE_DEPRECATION")
     override fun onDeviceAppeared(associationInfo: AssociationInfo) {
-        Log.i(TAG, "onDeviceAppeared: ${associationInfo.deviceMacAddress} — OS woke the service")
+        DiagLog.i(TAG, "onDeviceAppeared (legacy): ${associationInfo.deviceMacAddress} — OS woke the service")
+        onPresenceGained()
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
+        DiagLog.i(TAG, "onDeviceDisappeared (legacy): ${associationInfo.deviceMacAddress}")
+        onPresenceLost()
+    }
+
+    private fun onPresenceGained() {
         container.tripRecorder.onAdapterPresenceGained()
         maybeStartRecording()
     }
 
-    override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
-        Log.i(TAG, "onDeviceDisappeared: ${associationInfo.deviceMacAddress}")
+    private fun onPresenceLost() {
         // Don't end the trip outright — a brief dropout shouldn't. Just hint the recorder, which
         // auto-ends on a shortened grace once the OBD link is actually down (and a quick reconnect
         // cancels it).
@@ -37,19 +71,19 @@ class ObdCompanionService : CompanionDeviceService() {
 
     private fun maybeStartRecording() {
         if (!container.telemetrySettings.autoStartEnabled) {
-            Log.i(TAG, "maybeStartRecording: skipped — auto-start disabled in settings")
+            DiagLog.i(TAG, "maybeStartRecording: skipped — auto-start disabled in settings")
             return
         }
         if (container.tripRecorder.isRecording) {
-            Log.i(TAG, "maybeStartRecording: skipped — already recording")
+            DiagLog.i(TAG, "maybeStartRecording: skipped — already recording")
             return
         }
         val vehicleId = resolveVehicleId()
         if (vehicleId == null) {
-            Log.i(TAG, "maybeStartRecording: skipped — no vehicle resolved (none bound/selected)")
+            DiagLog.i(TAG, "maybeStartRecording: skipped — no vehicle resolved (none bound/selected)")
             return
         }
-        Log.i(TAG, "maybeStartRecording: starting TelemetryService for vehicleId=$vehicleId")
+        DiagLog.i(TAG, "maybeStartRecording: starting TelemetryService for vehicleId=$vehicleId")
         TelemetryService.start(this, vehicleId)
     }
 

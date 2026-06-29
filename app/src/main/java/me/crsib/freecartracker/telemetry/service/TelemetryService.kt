@@ -19,12 +19,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import me.crsib.freecartracker.CarTrackerApp
 import me.crsib.freecartracker.MainActivity
 import me.crsib.freecartracker.R
+import me.crsib.freecartracker.telemetry.DiagLog
 
 /**
  * Foreground service that keeps the process alive (and shows the ongoing notification) while
@@ -36,6 +39,7 @@ class TelemetryService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var selfStopJob: Job? = null
+    private var notificationJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -77,6 +81,7 @@ class TelemetryService : Service() {
                 }
                 container.tripRecorder.start(vehicleId, container.telemetrySettings.loadConnection())
                 observeForSelfStop()
+                observeForNotification()
                 return START_STICKY
             }
         }
@@ -100,7 +105,13 @@ class TelemetryService : Service() {
     }
 
     private fun startForegroundSafely(): Boolean = runCatching {
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), foregroundServiceType())
+        val type = foregroundServiceType()
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
+        DiagLog.i(TAG, "startForeground ok (type=$type)")
+    }.onFailure {
+        // A cold-start from the background that the OS rejects lands here (e.g.
+        // ForegroundServiceStartNotAllowedException). Surface it instead of silently bailing.
+        DiagLog.w(TAG, "startForeground denied: ${it.javaClass.simpleName}: ${it.message}")
     }.isSuccess
 
     /** OR of the manifest-declared FGS types whose backing runtime permission is currently held. */
@@ -120,6 +131,22 @@ class TelemetryService : Service() {
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Re-renders the ongoing notification once a second with live trip info (status, elapsed time,
+     * distance, current speed) pulled from [TripRecorder]. Bounded to ~1 Hz rather than collecting
+     * [TripRecorder.liveState] directly, which churns on every OBD/GPS reading.
+     */
+    private fun observeForNotification() {
+        notificationJob?.cancel()
+        notificationJob = serviceScope.launch {
+            val nm = getSystemService(NotificationManager::class.java)
+            while (isActive) {
+                nm.notify(NOTIFICATION_ID, buildNotification())
+                delay(1000)
+            }
+        }
+    }
+
     private fun buildNotification(): Notification {
         val openApp = PendingIntent.getActivity(
             this,
@@ -134,13 +161,38 @@ class TelemetryService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(getString(R.string.telemetry_recording_title))
-            .setContentText(getString(R.string.telemetry_recording_text))
+            .setContentTitle(notificationTitle())
+            .setContentText(notificationText())
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(openApp)
             .addAction(0, getString(R.string.telemetry_stop), stopIntent)
             .build()
+    }
+
+    /** Title reflects the connection phase so the user can tell connecting/reconnecting from live. */
+    private fun notificationTitle(): String = when (container.tripRecorder.recordingState.value) {
+        RecordingState.CONNECTING -> getString(R.string.telemetry_status_connecting)
+        RecordingState.RECONNECTING -> getString(R.string.telemetry_status_reconnecting)
+        else -> getString(R.string.telemetry_recording_title)
+    }
+
+    /** "12:34 · 8.3 km · 52 km/h" — elapsed always shown; distance/speed appear once they're live. */
+    private fun notificationText(): String {
+        val live = container.tripRecorder.liveState.value
+        val parts = mutableListOf(formatElapsed(live.elapsedSec))
+        if (live.distanceKm >= 0.05) parts += "%.1f km".format(live.distanceKm)
+        val speed = live.speedKmh ?: live.gpsSpeedKmh
+        if (speed != null && speed >= 0) parts += "%.0f km/h".format(speed)
+        return parts.joinToString(" · ")
+    }
+
+    private fun formatElapsed(totalSec: Long): String {
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
     }
 
     private fun createChannel() {
@@ -153,6 +205,7 @@ class TelemetryService : Service() {
     }
 
     companion object {
+        private const val TAG = "ObdAutoStart"
         private const val CHANNEL_ID = "telemetry_recording"
         private const val NOTIFICATION_ID = 42
         private const val ACTION_STOP = "me.crsib.freecartracker.telemetry.STOP"
@@ -162,7 +215,11 @@ class TelemetryService : Service() {
         fun start(context: Context, vehicleId: Long) {
             val intent = Intent(context, TelemetryService::class.java)
                 .putExtra(EXTRA_VEHICLE_ID, vehicleId)
-            ContextCompat.startForegroundService(context, intent)
+            // From a cold companion wake-up this runs in the background; if the OS refuses the
+            // background service start (BackgroundServiceStartNotAllowedException) it throws here,
+            // so log rather than let it crash the companion service.
+            runCatching { ContextCompat.startForegroundService(context, intent) }
+                .onFailure { DiagLog.w(TAG, "startForegroundService denied: ${it.javaClass.simpleName}: ${it.message}") }
         }
 
         fun stop(context: Context) {

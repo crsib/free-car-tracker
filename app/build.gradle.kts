@@ -19,7 +19,10 @@ val hasReleaseSigning = keystorePropsFile.exists()
 
 android {
     namespace = "me.crsib.freecartracker"
-    compileSdk = 35
+    // compileSdk 36 (not target) so we can call the API-36 CompanionDeviceManager
+    // ObservingDevicePresenceRequest, which is the variant that re-binds the companion service from
+    // a cold process kill; guarded at runtime, behaviour still governed by targetSdk below.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "me.crsib.freecartracker"

@@ -7,5 +7,7 @@
     <string name="telemetry_channel_desc">Ongoing notification while recording a trip</string>
     <string name="telemetry_recording_title">Recording trip</string>
     <string name="telemetry_recording_text">Collecting OBD &amp; GPS telemetry</string>
+    <string name="telemetry_status_connecting">Connecting to adapter…</string>
+    <string name="telemetry_status_reconnecting">Reconnecting…</string>
     <string name="telemetry_stop">Stop</string>
 </resources>

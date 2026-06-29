@@ -5,8 +5,11 @@ import android.companion.AssociationInfo
 import android.companion.AssociationRequest
 import android.companion.BluetoothDeviceFilter
 import android.companion.CompanionDeviceManager
+import android.companion.ObservingDevicePresenceRequest
 import android.content.Context
 import android.content.IntentSender
+import android.os.Build
+import me.crsib.freecartracker.telemetry.DiagLog
 
 /**
  * Wraps [CompanionDeviceManager] so the app can register the user's ELM327 as a companion device
@@ -74,21 +77,55 @@ class ObdCompanionManager(private val context: Context) {
         }.onFailure { onResult(AssociateResult.Failed(it.message)) }
     }
 
-    /** Start OS-level presence monitoring for [address]; the adapter must already be associated. */
+    /**
+     * Start OS-level presence monitoring for [address]; the adapter must already be associated.
+     *
+     * On API 36+ the legacy [CompanionDeviceManager.startObservingDevicePresence] (String) is
+     * deprecated and stops reliably re-binding [ObdCompanionService] across process death — the OS
+     * only delivers callbacks to a live process, so a cold-killed app never auto-starts. The
+     * request-based variant (observing by association id) is the one that re-binds the service from
+     * cold, so we use it there and keep the legacy call only as the pre-36 fallback.
+     */
     fun startObserving(address: String) {
         val manager = cdm ?: return
-        runCatching { manager.startObservingDevicePresence(address) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            val id = associationFor(address)?.id
+            if (id == null) {
+                DiagLog.w(TAG, "startObserving: no association for $address — associate first; not observing")
+                return
+            }
+            val request = ObservingDevicePresenceRequest.Builder().setAssociationId(id).build()
+            runCatching { manager.startObservingDevicePresence(request) }
+                .onSuccess { DiagLog.i(TAG, "startObserving: observing associationId=$id ($address) via request API") }
+                .onFailure { DiagLog.w(TAG, "startObserving: request observe failed for $address: ${it.message}") }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { manager.startObservingDevicePresence(address) }
+                .onSuccess { DiagLog.i(TAG, "startObserving: observing $address via legacy API") }
+                .onFailure { DiagLog.w(TAG, "startObserving: legacy observe failed for $address: ${it.message}") }
+        }
     }
 
     fun stopObserving(address: String) {
         val manager = cdm ?: return
-        runCatching { manager.stopObservingDevicePresence(address) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            val id = associationFor(address)?.id ?: return
+            val request = ObservingDevicePresenceRequest.Builder().setAssociationId(id).build()
+            runCatching { manager.stopObservingDevicePresence(request) }
+        } else {
+            @Suppress("DEPRECATION")
+            runCatching { manager.stopObservingDevicePresence(address) }
+        }
     }
 
     /** Stop observing and drop the association for [address] entirely. */
     fun disassociate(address: String) {
         val manager = cdm ?: return
-        runCatching { manager.stopObservingDevicePresence(address) }
+        stopObserving(address)
         associationFor(address)?.let { info -> runCatching { manager.disassociate(info.id) } }
+    }
+
+    private companion object {
+        const val TAG = "ObdAutoStart"
     }
 }
