@@ -57,6 +57,7 @@ class TelemetryService : Service() {
         return when (intent?.action) {
             ACTION_STOP -> {
                 container.tripRecorder.stop()
+                teardownNotification()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -99,9 +100,21 @@ class TelemetryService : Service() {
             container.tripRecorder.recordingState
                 .dropWhile { it == RecordingState.IDLE }
                 .first { it == RecordingState.IDLE }
+            teardownNotification()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    /**
+     * Stop the 1 Hz re-render loop *before* [stopForeground] removes the notification. Otherwise the
+     * loop can fire one more [NotificationManager.notify] between removal and [onDestroy] cancelling
+     * the scope, re-posting an ongoing notification with no foreground service behind it — which the
+     * user can neither swipe away (it's ongoing) nor stop (the Stop action has no service to reach).
+     */
+    private fun teardownNotification() {
+        notificationJob?.cancel()
+        notificationJob = null
     }
 
     private fun startForegroundSafely(): Boolean = runCatching {
