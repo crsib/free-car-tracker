@@ -197,6 +197,9 @@ class ObdConnectionViewModel(
         }
         // Persist the chosen adapter before wiring the OS to it.
         settings.saveConnection(config)
+        // Drop any association from a previously-chosen adapter; otherwise the old device stays
+        // observed and keeps cold-starting trips (e.g. headphones picked during earlier testing).
+        companion.clearAssociationsExcept(address)
         _state.update { it.copy(autoStartError = null) }
         if (companion.isAssociated(address)) {
             finishEnable(address)
@@ -222,7 +225,9 @@ class ObdConnectionViewModel(
 
     private fun disableAutoStart() {
         settings.autoStartEnabled = false
-        _state.value.config.deviceAddress?.let { companion.disassociate(it) }
+        // Drop *every* association, not just the current config address — the chosen adapter may
+        // have changed since this was enabled, which would otherwise orphan the old association.
+        companion.clearAllAssociations()
         _state.update { it.copy(autoStartEnabled = false, autoStartError = null) }
     }
 

@@ -40,6 +40,9 @@ class ObdCompanionManager(private val context: Context) {
     /** True if [address] is already associated with this app. */
     fun isAssociated(address: String): Boolean = associationFor(address) != null
 
+    /** Association id for [address], or null if not associated. Used to match presence events. */
+    fun associationIdFor(address: String): Int? = associationFor(address)?.id
+
     private fun associationFor(address: String): AssociationInfo? {
         val manager = cdm ?: return null
         return runCatching {
@@ -48,6 +51,26 @@ class ObdCompanionManager(private val context: Context) {
             }
         }.getOrNull()
     }
+
+    /**
+     * Drop every association this app holds whose MAC isn't [keepAddress] (stopping observation
+     * first). Switching the chosen adapter otherwise leaves the old device associated *and* still
+     * observed, so it keeps cold-starting trips — e.g. a previously-picked pair of headphones.
+     */
+    fun clearAssociationsExcept(keepAddress: String?) {
+        val manager = cdm ?: return
+        val all = runCatching { manager.myAssociations }.getOrNull() ?: return
+        for (info in all) {
+            val mac = info.deviceMacAddress?.toString()
+            if (mac != null && mac.equals(keepAddress, ignoreCase = true)) continue
+            stopObserving(info.id)
+            runCatching { manager.disassociate(info.id) }
+                .onSuccess { DiagLog.i(TAG, "clearAssociationsExcept: dropped stale association $mac (id=${info.id})") }
+        }
+    }
+
+    /** Stop observing and drop every association this app holds. Used when auto-start is turned off. */
+    fun clearAllAssociations() = clearAssociationsExcept(null)
 
     /**
      * Ask the system to associate the adapter at [address]. Results are delivered to [onResult]:
@@ -107,12 +130,20 @@ class ObdCompanionManager(private val context: Context) {
     }
 
     fun stopObserving(address: String) {
+        val id = associationFor(address)?.id ?: return
+        stopObserving(id)
+    }
+
+    /** Stop observing by association id (post-36 uses the id directly; pre-36 maps back to the MAC). */
+    private fun stopObserving(associationId: Int) {
         val manager = cdm ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
-            val id = associationFor(address)?.id ?: return
-            val request = ObservingDevicePresenceRequest.Builder().setAssociationId(id).build()
+            val request = ObservingDevicePresenceRequest.Builder().setAssociationId(associationId).build()
             runCatching { manager.stopObservingDevicePresence(request) }
         } else {
+            val address = runCatching {
+                manager.myAssociations.firstOrNull { it.id == associationId }?.deviceMacAddress?.toString()
+            }.getOrNull() ?: return
             @Suppress("DEPRECATION")
             runCatching { manager.stopObservingDevicePresence(address) }
         }

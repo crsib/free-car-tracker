@@ -33,6 +33,10 @@ class ObdCompanionService : CompanionDeviceService() {
     @RequiresApi(Build.VERSION_CODES.BAKLAVA)
     override fun onDevicePresenceEvent(event: DevicePresenceEvent) {
         DiagLog.i(TAG, "onDevicePresenceEvent: event=${event.event} assoc=${event.associationId}")
+        if (!isConfiguredAdapter(event.associationId)) {
+            DiagLog.i(TAG, "onDevicePresenceEvent: ignored — assoc ${event.associationId} isn't the configured OBD adapter")
+            return
+        }
         when (event.event) {
             DevicePresenceEvent.EVENT_BT_CONNECTED,
             DevicePresenceEvent.EVENT_BLE_APPEARED,
@@ -48,13 +52,29 @@ class ObdCompanionService : CompanionDeviceService() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onDeviceAppeared(associationInfo: AssociationInfo) {
         DiagLog.i(TAG, "onDeviceAppeared (legacy): ${associationInfo.deviceMacAddress} — OS woke the service")
+        if (!isConfiguredAdapter(associationInfo)) {
+            DiagLog.i(TAG, "onDeviceAppeared: ignored — ${associationInfo.deviceMacAddress} isn't the configured OBD adapter")
+            return
+        }
         onPresenceGained()
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
         DiagLog.i(TAG, "onDeviceDisappeared (legacy): ${associationInfo.deviceMacAddress}")
+        if (!isConfiguredAdapter(associationInfo)) return
         onPresenceLost()
+    }
+
+    /** True if the firing association is the OBD adapter saved in settings — not some other device. */
+    private fun isConfiguredAdapter(associationId: Int): Boolean {
+        val address = container.telemetrySettings.loadConnection().deviceAddress ?: return false
+        return container.obdCompanionManager.associationIdFor(address) == associationId
+    }
+
+    private fun isConfiguredAdapter(info: AssociationInfo): Boolean {
+        val address = container.telemetrySettings.loadConnection().deviceAddress ?: return false
+        return info.deviceMacAddress?.toString().equals(address, ignoreCase = true)
     }
 
     private fun onPresenceGained() {

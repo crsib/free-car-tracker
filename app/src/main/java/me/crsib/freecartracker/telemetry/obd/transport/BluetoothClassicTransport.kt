@@ -7,7 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import me.crsib.freecartracker.domain.model.ObdTransportKind
 import java.io.InputStream
 import java.io.OutputStream
@@ -33,9 +35,13 @@ class BluetoothClassicTransport(
         val device = adapter.getRemoteDevice(address)
         val s = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
         try {
-            s.connect()
+            // BluetoothSocket.connect() blocks; to a powered-off / out-of-range adapter it can hang
+            // far longer than the RFCOMM stack's own timeout. Bound it so the recorder can fall back
+            // to RECONNECTING instead of sitting on "Connecting to adapter…" forever. runInterruptible
+            // lets the timeout interrupt the blocking call; closing the socket also aborts it.
+            withTimeout(CONNECT_TIMEOUT_MS) { runInterruptible { s.connect() } }
         } catch (e: Throwable) {
-            runCatching { s.close() } // release the fd if connect fails
+            runCatching { s.close() } // release the fd if connect fails (and unblock a hung connect)
             throw e
         }
         socket = s
@@ -50,5 +56,8 @@ class BluetoothClassicTransport(
 
     companion object {
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+        /** Upper bound on a single RFCOMM connect attempt before we give up and reconnect. */
+        const val CONNECT_TIMEOUT_MS = 15_000L
     }
 }
