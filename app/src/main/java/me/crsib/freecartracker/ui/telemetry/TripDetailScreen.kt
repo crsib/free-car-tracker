@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
@@ -23,10 +24,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,8 +58,17 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit, onOpenMap: (Long) -> Unit
         TripDetailViewModel(c.telemetryRepository, tripId)
     }
     val state by vm.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    state.message?.let { message ->
+        LaunchedEffect(message) {
+            snackbarHostState.showSnackbar(message)
+            vm.messageShown()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Trip") },
@@ -64,6 +78,9 @@ fun TripDetailScreen(tripId: Long, onBack: () -> Unit, onOpenMap: (Long) -> Unit
                     }
                 },
                 actions = {
+                    IconButton(onClick = { vm.recompute() }, enabled = !state.recomputing) {
+                        Icon(Icons.Filled.Autorenew, contentDescription = "Recalculate metrics")
+                    }
                     IconButton(onClick = { vm.delete(onBack) }) {
                         Icon(Icons.Filled.Delete, contentDescription = "Delete trip")
                     }

@@ -1,6 +1,7 @@
 package me.crsib.freecartracker.telemetry.data
 
 import kotlinx.coroutines.flow.Flow
+import me.crsib.freecartracker.telemetry.TripAggregator
 import me.crsib.freecartracker.data.dao.VehicleDao
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.domain.model.TripStatus
@@ -123,6 +124,28 @@ class TelemetryRepository(
             obdSampleCount = agg.obdSampleCount,
             gpsPointCount = agg.gpsPointCount,
         )
+    }
+
+    /**
+     * Recompute a finished trip's aggregates from its still-stored samples and persist them. Lets a
+     * trip recorded under an older aggregation (e.g. before odometer-based distance) pick up the
+     * corrected metrics without re-driving — the per-sample time series is never pruned, so the
+     * numbers are fully rebuildable. No-op (returns null) if the trip is gone or still recording.
+     *
+     * Local-only: it does not re-push an already-synced trip to WebDAV (the remote manifest is
+     * written once and not overwritten), so corrected metrics stay on this device.
+     */
+    suspend fun recomputeAggregates(tripId: Long): TripAggregates? {
+        val trip = tripDao.getById(tripId) ?: return null
+        if (trip.status == TripStatus.RECORDING) return null
+        val data = getTripData(tripId) ?: return null
+        val ended = trip.endedAtMillis
+            ?: data.obdSamples.lastOrNull()?.timestampMillis
+            ?: data.gpsPoints.lastOrNull()?.timestampMillis
+            ?: trip.startedAtMillis
+        val agg = TripAggregator.aggregate(trip.startedAtMillis, ended, data.gpsPoints, data.obdSamples)
+        finalizeTrip(tripId, trip.status, ended, agg)
+        return agg
     }
 
     suspend fun countSamples(tripId: Long): Pair<Int, Int> =

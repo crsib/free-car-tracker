@@ -4,6 +4,8 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -92,10 +94,25 @@ fun LiveTelemetryScreen(
 
     val vehicleId = state.selectedVehicle?.id
 
+    // Background location is best-effort and only matters for auto-started (headless) trips, so we
+    // start recording regardless of whether the user grants "Allow all the time".
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(RequestPermission()) {
+        if (vehicleId != null) TelemetryService.start(context, vehicleId)
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) { grants ->
         // Start once location (the minimum) is granted; OBD works without BT for GPS-only trips.
         if (vehicleId != null && grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
-            TelemetryService.start(context, vehicleId)
+            // Android 11+ rejects background location when bundled with the foreground request, so
+            // prompt for it as a separate step now that foreground location is granted. This is what
+            // lets auto-started trips record GPS; the start happens from the launcher callback.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                !hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            ) {
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } else {
+                TelemetryService.start(context, vehicleId)
+            }
         }
     }
 
@@ -417,6 +434,10 @@ private fun buildTiles(live: me.crsib.freecartracker.telemetry.service.LiveTelem
 
 private fun Double?.pct(): String = this?.let { "${formatNumber(it)} %" } ?: "—"
 private fun Double?.temp(): String = this?.let { "${formatNumber(it)} °C" } ?: "—"
+
+private fun hasPermission(context: android.content.Context, permission: String): Boolean =
+    ContextCompat.checkSelfPermission(context, permission) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
 
 private fun requiredPermissions(context: android.content.Context): Array<String> {
     val config = (context.applicationContext as me.crsib.freecartracker.CarTrackerApp)

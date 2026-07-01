@@ -16,8 +16,11 @@ class TripAggregatorTest {
             altitudeM = null, speedKmh = speedKmh, bearingDeg = null, accuracyM = null, provider = "gps",
         )
 
-    private fun obd(tsSec: Long, speedKmh: Double?, fuelRateLph: Double? = null) =
-        ObdSample(tripId = 1, timestampMillis = tsSec * 1000, speedKmh = speedKmh, fuelRateLph = fuelRateLph)
+    private fun obd(tsSec: Long, speedKmh: Double?, fuelRateLph: Double? = null, odometerKm: Double? = null) =
+        ObdSample(
+            tripId = 1, timestampMillis = tsSec * 1000, speedKmh = speedKmh,
+            fuelRateLph = fuelRateLph, odometerKm = odometerKm,
+        )
 
     @Test
     fun gpsTrip_distanceAndSpeeds() {
@@ -48,6 +51,46 @@ class TripAggregatorTest {
         assertEquals(1.0, agg.distanceKm!!, 0.01)
         assertEquals(3, agg.obdSampleCount)
         assertEquals(0, agg.gpsPointCount)
+    }
+
+    @Test
+    fun odometer_preferredOverGpsForDistance() {
+        // Odometer says 12.0 km driven; a sparse/garbage GPS track would say otherwise. Odometer wins.
+        val gps = listOf(
+            gps(0, 0.0, 0.0, 30.0),
+            gps(60, 0.0, 0.001, 30.0), // ~0.111 km — clearly wrong for the real drive
+        )
+        val obd = listOf(
+            obd(0, 30.0, odometerKm = 45_000.0),
+            obd(60, 30.0, odometerKm = 45_012.0),
+        )
+        val agg = TripAggregator.aggregate(0, 60_000, gps, obd)
+        assertEquals(12.0, agg.distanceKm!!, 1e-6)
+    }
+
+    @Test
+    fun odometer_derivesFuelEconomyEvenWithoutGps() {
+        // Headless trip (no GPS): 6 L/h for 3600 s -> 6 L, 60 km by odometer -> 10 L/100km.
+        val obd = listOf(
+            obd(0, 60.0, fuelRateLph = 6.0, odometerKm = 1000.0),
+            obd(1800, 60.0, fuelRateLph = 6.0, odometerKm = 1030.0),
+            obd(3600, 60.0, fuelRateLph = 6.0, odometerKm = 1060.0),
+        )
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(60.0, agg.distanceKm!!, 1e-6)
+        assertEquals(10.0, agg.avgConsumptionL100!!, 1e-6)
+    }
+
+    @Test
+    fun odometer_implausibleDeltaFallsBackToSpeed() {
+        // A rollover/garbage odometer delta is ignored; distance falls back to speed integration.
+        val obd = listOf(
+            obd(0, 36.0, odometerKm = 90_000.0),
+            obd(50, 36.0, odometerKm = 0.0),
+            obd(100, 36.0, odometerKm = 1.0),
+        )
+        val agg = TripAggregator.aggregate(0, 100_000, emptyList(), obd)
+        assertEquals(1.0, agg.distanceKm!!, 0.01) // 36 km/h for 100 s
     }
 
     @Test

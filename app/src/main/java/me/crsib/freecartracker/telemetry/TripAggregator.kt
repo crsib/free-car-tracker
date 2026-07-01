@@ -6,13 +6,21 @@ import me.crsib.freecartracker.telemetry.data.entity.ObdSample
 
 /**
  * Computes a trip's summary aggregates from its recorded samples. Pure (no Android/DB), so it
- * is unit-testable. Distance prefers the GPS track (haversine); if there are too few GPS fixes
- * it falls back to integrating OBD speed over time. GPS-only and OBD-only trips both work.
+ * is unit-testable. Distance prefers the vehicle odometer (the most accurate source, and the one
+ * that keeps working when GPS is unavailable); it falls back to the GPS track (haversine), then to
+ * integrating OBD speed over time. GPS-only and OBD-only trips both work.
  */
 object TripAggregator {
 
     /** Speed (km/h) below which the car is considered idling, not moving. */
     private const val MOVING_THRESHOLD_KMH = 3.0
+
+    /**
+     * Upper bound on a single trip's odometer delta (km). Guards against an odometer PID that
+     * rolls over or reports a garbage value: a delta above this is treated as implausible and we
+     * fall back to GPS/OBD-speed distance instead.
+     */
+    private const val MAX_PLAUSIBLE_ODOMETER_DELTA_KM = 5_000.0
 
     fun aggregate(
         startedAtMillis: Long,
@@ -22,11 +30,12 @@ object TripAggregator {
     ): TripAggregates {
         val durationSec = ((endedAtMillis - startedAtMillis).coerceAtLeast(0)) / 1000
 
-        val gpsDistance = gpsDistanceKm(gps)
-        val distanceKm = when {
-            gpsDistance != null -> gpsDistance
-            else -> obdDistanceKm(obd)
-        }
+        // Odometer first: an absolute, drift-free reading that (unlike GPS) is recorded even when
+        // the trip runs headless without a location fix. GPS haversine and OBD-speed integration
+        // are fallbacks for trips where the odometer PID isn't available.
+        val distanceKm = odometerDistanceKm(obd)
+            ?: gpsDistanceKm(gps)
+            ?: obdDistanceKm(obd)
 
         val speeds = when {
             gps.count { it.speedKmh != null } >= 2 -> gps.mapNotNull { it.speedKmh }
@@ -56,6 +65,19 @@ object TripAggregator {
             obdSampleCount = obd.size,
             gpsPointCount = gps.size,
         )
+    }
+
+    /**
+     * Distance from the vehicle odometer: last minus first reading. The odometer is monotonic, so
+     * the delta is the exact ground distance driven. Returns null when there aren't two readings,
+     * the delta is non-positive (sub-1-km trip on a coarse odometer, or no movement), or the delta
+     * is implausibly large (rollover / garbage) — letting the caller fall back to GPS.
+     */
+    private fun odometerDistanceKm(obd: List<ObdSample>): Double? {
+        val readings = obd.mapNotNull { it.odometerKm }
+        if (readings.size < 2) return null
+        val delta = readings.last() - readings.first()
+        return delta.takeIf { it > 0.0 && it <= MAX_PLAUSIBLE_ODOMETER_DELTA_KM }
     }
 
     private fun gpsDistanceKm(gps: List<GpsPoint>): Double? {

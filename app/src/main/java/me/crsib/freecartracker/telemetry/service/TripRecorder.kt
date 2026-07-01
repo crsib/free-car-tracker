@@ -218,16 +218,28 @@ class TripRecorder(
         }
     }
 
+    /**
+     * Keeps a GPS subscription alive for the whole trip. A single subscription can end for reasons
+     * that aren't permanent — the provider was momentarily disabled, no fix yet after a cold start,
+     * or the fused/manager callback stopped — so we re-subscribe on a fixed cadence instead of
+     * giving up after the first attempt (which lost GPS for an entire drive on auto-started trips).
+     * Cancellation (trip end) propagates out and stops the loop.
+     */
     private suspend fun collectGps() {
-        try {
-            collectGpsInternal()
-        } catch (c: CancellationException) {
-            throw c
-        } catch (_: Exception) {
-            // Location unavailable or permission not granted: record OBD-only, don't fail the trip.
+        while (coroutineContext.isActive) {
+            try {
+                collectGpsInternal()
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Exception) {
+                // Location unavailable or permission not granted right now: record OBD-only for this
+                // cycle, don't fail the trip. Retry below in case it becomes available mid-trip.
+            }
+            delay(GPS_RETRY_MS)
         }
     }
 
+    /** Subscribe once; returns when the source is unavailable or its flow completes. */
     private suspend fun collectGpsInternal() {
         val source: LocationSource = locationFactory.create()
         if (!source.isAvailable()) return
@@ -429,6 +441,9 @@ class TripRecorder(
     private companion object {
         const val TAG = "TripRecorder"
         const val GPS_INTERVAL_MS = 1000L
+
+        /** Delay before re-subscribing to GPS after a subscription ends (unavailable / no fix). */
+        const val GPS_RETRY_MS = 5000L
         const val FLUSH_INTERVAL_MS = 2000L
         const val INITIAL_BACKOFF_MS = 1000L
         const val MAX_BACKOFF_MS = 15_000L

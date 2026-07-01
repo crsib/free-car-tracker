@@ -117,14 +117,28 @@ class TelemetryService : Service() {
         notificationJob = null
     }
 
-    private fun startForegroundSafely(): Boolean = runCatching {
-        val type = foregroundServiceType()
+    private fun startForegroundSafely(): Boolean {
+        val fullType = foregroundServiceType()
+        if (startForeground(fullType)) return true
+
+        // The most common rejection on a cold companion wake-up is the LOCATION type: starting a
+        // location FGS from the background needs ACCESS_BACKGROUND_LOCATION, which the user may not
+        // have granted ("While using the app" only). Rather than abandon the trip, retry without
+        // location so OBD still records — GPS simply won't, which is expected without that grant.
+        val withoutLocation = fullType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION.inv()
+        if (withoutLocation != fullType && withoutLocation != 0 && startForeground(withoutLocation)) {
+            return true
+        }
+        return false
+    }
+
+    private fun startForeground(type: Int): Boolean = runCatching {
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type)
         DiagLog.i(TAG, "startForeground ok (type=$type)")
     }.onFailure {
         // A cold-start from the background that the OS rejects lands here (e.g.
         // ForegroundServiceStartNotAllowedException). Surface it instead of silently bailing.
-        DiagLog.w(TAG, "startForeground denied: ${it.javaClass.simpleName}: ${it.message}")
+        DiagLog.w(TAG, "startForeground denied (type=$type): ${it.javaClass.simpleName}: ${it.message}")
     }.isSuccess
 
     /** OR of the manifest-declared FGS types whose backing runtime permission is currently held. */
