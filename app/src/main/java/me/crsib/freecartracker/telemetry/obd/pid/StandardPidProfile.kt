@@ -9,7 +9,6 @@ import com.github.eltonvs.obd.command.engine.RuntimeCommand
 import com.github.eltonvs.obd.command.engine.SpeedCommand
 import com.github.eltonvs.obd.command.engine.ThrottlePositionCommand
 import com.github.eltonvs.obd.command.fuel.FuelConsumptionRateCommand
-import com.github.eltonvs.obd.command.fuel.FuelLevelCommand
 import com.github.eltonvs.obd.command.pressure.IntakeManifoldPressureCommand
 import com.github.eltonvs.obd.command.temperature.AirIntakeTemperatureCommand
 import com.github.eltonvs.obd.command.temperature.AmbientAirTemperatureCommand
@@ -116,6 +115,26 @@ class HvBatteryCurrentCommand : ObdCommand() {
         } else {
             ""
         }
+    }
+}
+
+/**
+ * Mode 01 PID 0x2F — Fuel tank level (%). The library's stock [com.github.eltonvs.obd.command.fuel]
+ * `FuelLevelCommand` folds the whole ELM buffer like the old RPM/voltage commands did, so on this
+ * car — where several ECUs answer one broadcast, and long replies arrive as an ISO-TP block — it
+ * produced wild jumps (100 % → 25 % → back) that read as a broken fuel gauge. We decode the first
+ * responder's single data byte instead: level = A * 100 / 255. A truncated / NO DATA reply yields a
+ * non-numeric sentinel so the reading is skipped rather than fabricating a value.
+ */
+class FuelLevelCommand : ObdCommand() {
+    override val tag = "FUEL_LEVEL"
+    override val name = "Fuel Level"
+    override val mode = "01"
+    override val pid = "2F"
+    override val defaultUnit = "%"
+    override val handler: (ObdRawResponse) -> String = { r ->
+        val d = Mode01ResponseDecoder.dataBytes(r.value, pid)
+        if (d != null && d.isNotEmpty()) "%.1f".format(d[0] * 100.0 / 255.0) else ""
     }
 }
 
