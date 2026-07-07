@@ -182,7 +182,7 @@ private fun TripDetailContent(data: TripData, onOpenMap: (Long) -> Unit, modifie
 private fun SummaryTable(data: TripData) {
     val trip = data.trip
 
-    val fuelLevel = firstLast(data.obdSamples) { it.fuelLevelPct }
+    val fuelLevel = robustFuelSpan(data.obdSamples.mapNotNull { it.fuelLevelPct })
     val batteryLevel = batteryStartEnd(data)
     val odometer = firstLast(data.obdSamples) { it.odometerKm }
     // Prefer the fuel-rate integral; fall back to tank-level drop × capacity so the figure shows
@@ -217,6 +217,9 @@ private fun SummaryTable(data: TripData) {
             fuelUsedL?.let { add("Fuel used" to "${formatNumber(it)} L${if (fuelUsedEstimated) " (est.)" else ""}") }
             trip.energyUsedKwh?.let { add("Energy used" to "${formatNumber(it)} kWh") }
             avgUsage?.let { add("Avg consumption" to "${formatNumber(it)} L/100km${if (avgUsageEstimated) " (est.)" else ""}") }
+            energyPer100Km(trip.energyUsedKwh, trip.distanceKm)?.let {
+                add("Avg energy use" to "${formatNumber(it)} kWh/100km")
+            }
         },
     )
     SummarySection(

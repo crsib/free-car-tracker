@@ -49,16 +49,20 @@ interface ObdSampleDao {
     suspend fun finalOdometerByVehicle(vehicleId: Long): List<TripOdometer>
 
     /**
-     * First and last reported fuel-tank level (%) per trip for a vehicle. Used to estimate fuel
-     * burned (and thus average usage) from the tank drop when the car doesn't report fuel rate.
-     * A side with no fuel reading comes back null.
+     * Start and end fuel-tank level (%) per trip for a vehicle, each the mean of the first / last 5
+     * non-null readings rather than a single raw sample — the fuel sender sloshes, so averaging a
+     * short window damps the noise (the `LIMIT 5` matches `FUEL_ENDPOINT_WINDOW` on the UI side).
+     * Used to estimate fuel burned (and average usage) from the tank drop when the car doesn't
+     * report fuel rate. A side with no fuel reading comes back null.
      */
     @Query(
         "SELECT t.id AS tripId, " +
-            "(SELECT a.fuelLevelPct FROM obd_samples a WHERE a.tripId = t.id AND a.fuelLevelPct IS NOT NULL " +
-            "ORDER BY a.timestampMillis ASC, a.id ASC LIMIT 1) AS startPct, " +
-            "(SELECT b.fuelLevelPct FROM obd_samples b WHERE b.tripId = t.id AND b.fuelLevelPct IS NOT NULL " +
-            "ORDER BY b.timestampMillis DESC, b.id DESC LIMIT 1) AS endPct " +
+            "(SELECT AVG(x) FROM (SELECT a.fuelLevelPct AS x FROM obd_samples a " +
+            "WHERE a.tripId = t.id AND a.fuelLevelPct IS NOT NULL " +
+            "ORDER BY a.timestampMillis ASC, a.id ASC LIMIT 5)) AS startPct, " +
+            "(SELECT AVG(x) FROM (SELECT b.fuelLevelPct AS x FROM obd_samples b " +
+            "WHERE b.tripId = t.id AND b.fuelLevelPct IS NOT NULL " +
+            "ORDER BY b.timestampMillis DESC, b.id DESC LIMIT 5)) AS endPct " +
             "FROM trips t WHERE t.vehicleId = :vehicleId",
     )
     suspend fun fuelSpansByVehicle(vehicleId: Long): List<TripFuelSpan>

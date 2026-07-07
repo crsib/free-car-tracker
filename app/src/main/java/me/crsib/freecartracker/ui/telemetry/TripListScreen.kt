@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Route
@@ -123,6 +124,7 @@ fun TripListScreen(
                     trip = trip,
                     finalOdometerKm = state.odometerByTrip[trip.id],
                     avgFuelUsageL100 = state.avgFuelUsageByTrip[trip.id],
+                    avgEnergyUsageKwh100 = state.avgEnergyUsageByTrip[trip.id],
                     onClick = { onOpenTrip(trip.id) },
                     onDelete = { vm.deleteTrip(trip.id) },
                 )
@@ -137,6 +139,7 @@ private fun TripRow(
     trip: Trip,
     finalOdometerKm: Double?,
     avgFuelUsageL100: Double?,
+    avgEnergyUsageKwh100: Double?,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -149,7 +152,7 @@ private fun TripRow(
             Column(Modifier.weight(1f)) {
                 Text(formatDate(trip.startedAtMillis), fontWeight = FontWeight.Medium)
                 val hasStats = trip.distanceKm != null || trip.durationSec != null ||
-                    trip.avgSpeedKmh != null || avgFuelUsageL100 != null
+                    trip.avgSpeedKmh != null || avgFuelUsageL100 != null || avgEnergyUsageKwh100 != null
                 if (hasStats) {
                     // Each stat is an atomic icon+value, so FlowRow wraps whole stats to the next
                     // line instead of breaking a value mid-token (e.g. "8.8 L/" / "100km").
@@ -162,6 +165,7 @@ private fun TripRow(
                         trip.durationSec?.let { SummaryStat(Icons.Filled.Schedule, formatDuration(it)) }
                         trip.avgSpeedKmh?.let { SummaryStat(Icons.Filled.Speed, "${formatNumber(it)} km/h") }
                         avgFuelUsageL100?.let { SummaryStat(Icons.Filled.LocalGasStation, "${formatNumber(it)} L/100km") }
+                        avgEnergyUsageKwh100?.let { SummaryStat(Icons.Filled.Bolt, "${formatNumber(it)} kWh/100km") }
                     }
                 } else {
                     Text(
