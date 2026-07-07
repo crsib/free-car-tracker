@@ -162,14 +162,16 @@ class TripRecorder(
     private suspend fun collectObd(vehicleId: Long, config: ObdConnectionConfig) {
         val vehicle = vehicleRepo.getById(vehicleId) ?: return
         val profile = PidProfileRegistry.select(vehicle)
+        val odometerDef = profile.pids.firstOrNull { it.key == "odometerKm" }
         var backoffMs = INITIAL_BACKOFF_MS
         while (coroutineContext.isActive) {
             var transport: ObdTransport? = null
+            var session: ObdSession? = null
             try {
                 _recordingState.value = RecordingState.CONNECTING
                 transport = transportFactory.create(config)
                 transport.connect()
-                val session = ObdSession(transport)
+                session = ObdSession(transport)
                 session.initialize()
                 val supported = runCatching { session.discoverSupportedPids() }.getOrDefault(emptySet())
                 val defs = profile.pids.filter { def ->
@@ -184,8 +186,16 @@ class TripRecorder(
                 _liveState.update { it.copy(obdConnected = true) }
                 obdLostSince = null
                 backoffMs = INITIAL_BACKOFF_MS
+                // Grab the odometer immediately, so the trip's first odometer sample marks the start
+                // of the connected window instead of lagging until the SLOW round-robin reaches it —
+                // which otherwise shortens the odometer-based trip distance.
+                snapshotOdometer(session, odometerDef)
                 poller.readings().collect { readings -> onObdReadings(readings) }
             } catch (c: CancellationException) {
+                // One last odometer read before teardown, so the final sample marks the end of the
+                // connected window (the mirror of the eager read above). NonCancellable so it still
+                // runs on the cancelling coroutine.
+                session?.let { withContext(NonCancellable) { snapshotOdometer(it, odometerDef) } }
                 runCatching { transport?.close() }
                 throw c
             } catch (e: Exception) {
@@ -275,6 +285,13 @@ class TripRecorder(
                 )
             }
         }
+    }
+
+    /** One-shot odometer read fed through the normal sample path; no-op if the PID isn't in play. */
+    private suspend fun snapshotOdometer(session: ObdSession, def: me.crsib.freecartracker.telemetry.obd.pid.PidDefinition?) {
+        if (def == null) return
+        val readings = runCatching { session.query(def) }.getOrDefault(emptyList())
+        if (readings.isNotEmpty()) onObdReadings(readings)
     }
 
     private suspend fun onObdReadings(readings: List<ObdReading>) {
@@ -399,11 +416,35 @@ class TripRecorder(
         } else {
             EMPTY_AGGREGATES
         }
+        if (isTrivialSession(startedAt, data, agg.distanceKm)) {
+            // A false auto-start / brief adapter blip: drop the junk trip instead of finalizing it.
+            runCatching { telemetryRepo.deleteTrip(id) }
+            tripId = null
+            _liveState.value = LiveTelemetry()
+            _recordingState.value = RecordingState.IDLE
+            return
+        }
         telemetryRepo.finalizeTrip(id, status, ended, agg)
         tripId = null
         _liveState.value = LiveTelemetry()
         _recordingState.value = RecordingState.IDLE
         if (status == TripStatus.COMPLETED) runCatching { onTripCompleted() }
+    }
+
+    /**
+     * True for a "session" not worth keeping: a false auto-start or a momentary adapter blip that
+     * recorded almost no data. Judged by the span of the recorded samples (last timestamp − start)
+     * rather than [startedAt]→ended, because an auto-ended trip's end time includes the multi-minute
+     * OBD-loss grace and would make even an empty session look long. A trip that actually covered
+     * distance is always kept, however brief.
+     */
+    private fun isTrivialSession(startedAt: Long, data: me.crsib.freecartracker.telemetry.data.TripData?, distanceKm: Double?): Boolean {
+        if ((distanceKm ?: 0.0) >= MIN_TRIP_KM) return false
+        val lastSample = maxOf(
+            data?.obdSamples?.lastOrNull()?.timestampMillis ?: startedAt,
+            data?.gpsPoints?.lastOrNull()?.timestampMillis ?: startedAt,
+        )
+        return lastSample - startedAt < MIN_TRIP_MILLIS
     }
 
     private suspend fun resetBuffers() = bufferMutex.withLock {
@@ -432,7 +473,11 @@ class TripRecorder(
                     } else {
                         EMPTY_AGGREGATES
                     }
-                    telemetryRepo.finalizeTrip(orphan.id, TripStatus.ABORTED, ended, agg)
+                    if (isTrivialSession(orphan.startedAtMillis, data, agg.distanceKm)) {
+                        telemetryRepo.deleteTrip(orphan.id)
+                    } else {
+                        telemetryRepo.finalizeTrip(orphan.id, TripStatus.ABORTED, ended, agg)
+                    }
                 }
             }
         }
@@ -447,6 +492,10 @@ class TripRecorder(
         const val FLUSH_INTERVAL_MS = 2000L
         const val INITIAL_BACKOFF_MS = 1000L
         const val MAX_BACKOFF_MS = 15_000L
+
+        /** Below this recorded data span AND distance, a session is a false start and is discarded. */
+        const val MIN_TRIP_MILLIS = 10_000L
+        const val MIN_TRIP_KM = 0.2
 
         /** Auto-end watchdog cadence and grace periods (sustained OBD loss → finalize the trip). */
         const val AUTO_END_CHECK_MS = 15_000L

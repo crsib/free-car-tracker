@@ -71,7 +71,8 @@ class TripRecorderIntegrationTest {
 
             recorder.start(vehicleId, config)
             withTimeout(15_000) { recorder.recordingState.first { it == RecordingState.RECORDING } }
-            delay(3_000) // let several poll cycles run
+            // Record past the trivial-session floor (10 s span) so the trip is kept, not dropped.
+            delay(12_000)
             recorder.stop()
             withTimeout(10_000) { recorder.recordingState.first { it == RecordingState.IDLE } }
 
@@ -81,6 +82,45 @@ class TripRecorderIntegrationTest {
             assertEquals(TripStatus.COMPLETED, trip.status)
             assertTrue("expected recorded OBD samples, got ${trip.obdSampleCount}", trip.obdSampleCount > 0)
             assertTrue("expected non-null duration", (trip.durationSec ?: -1) >= 0)
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * A sub-threshold session — no distance and under the 10 s data-span floor — must be discarded
+     * rather than saved as a junk trip (false auto-start / brief adapter blip). Uses a GPS-only
+     * (NONE transport) session so it needs neither the emulator nor a location fix.
+     */
+    @Test
+    fun dropsTrivialShortSession() = runBlocking {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(ctx, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val vehicleRepo = VehicleRepository(db.vehicleDao())
+            val telemetryRepo = TelemetryRepository(
+                db.tripDao(), db.gpsPointDao(), db.obdSampleDao(), db.obdExtendedSampleDao(), db.dtcDao(),
+            )
+            val vehicleId = vehicleRepo.add(
+                Vehicle(name = "Blip Car", powertrain = Powertrain.ICE, createdAt = 0L),
+            )
+            val recorder = TripRecorder(
+                telemetryRepo = telemetryRepo,
+                vehicleRepo = vehicleRepo,
+                transportFactory = TransportFactory(ctx),
+                locationFactory = LocationSourceFactory(ctx),
+            )
+
+            recorder.start(vehicleId, ObdConnectionConfig(kind = ObdTransportKind.NONE))
+            withTimeout(5_000) { recorder.recordingState.first { it == RecordingState.RECORDING } }
+            delay(500) // well under the 10 s floor, with no distance
+            recorder.stop()
+            withTimeout(5_000) { recorder.recordingState.first { it == RecordingState.IDLE } }
+
+            val trips = db.tripDao().observeForVehicle(vehicleId).first()
+            assertEquals("trivial session should be dropped", 0, trips.size)
         } finally {
             db.close()
         }
