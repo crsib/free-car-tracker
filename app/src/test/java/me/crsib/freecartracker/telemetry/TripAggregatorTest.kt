@@ -10,10 +10,10 @@ import org.junit.Test
 
 class TripAggregatorTest {
 
-    private fun gps(tsSec: Long, lat: Double, lon: Double, speedKmh: Double?) =
+    private fun gps(tsSec: Long, lat: Double, lon: Double, speedKmh: Double?, accuracyM: Float? = null) =
         GpsPoint(
             tripId = 1, timestampMillis = tsSec * 1000, latitude = lat, longitude = lon,
-            altitudeM = null, speedKmh = speedKmh, bearingDeg = null, accuracyM = null, provider = "gps",
+            altitudeM = null, speedKmh = speedKmh, bearingDeg = null, accuracyM = accuracyM, provider = "gps",
         )
 
     private fun obd(tsSec: Long, speedKmh: Double?, fuelRateLph: Double? = null, odometerKm: Double? = null) =
@@ -37,6 +37,32 @@ class TripAggregatorTest {
         assertEquals(3, agg.gpsPointCount)
         assertEquals(0, agg.obdSampleCount)
         assertNull("no fuel-rate samples -> null consumption", agg.fuelUsedL)
+    }
+
+    @Test
+    fun stationaryJitter_yieldsNearZeroDistance() {
+        // A phone sitting still next to the car: fixes wander a few metres each second (≈5 m hops,
+        // 15 m accuracy) at a walking-or-less GPS speed. Raw haversine would sum this into a phantom
+        // "trip"; the gate must read it as ~0 so the session is later discarded as trivial.
+        val jitter = listOf(
+            gps(0, 0.0, 0.00000, 0.4, accuracyM = 15f),
+            gps(1, 0.00004, 0.00003, 0.6, accuracyM = 15f),
+            gps(2, -0.00003, 0.00005, 0.3, accuracyM = 15f),
+            gps(3, 0.00002, -0.00004, 0.5, accuracyM = 15f),
+            gps(4, 0.00005, 0.00001, 0.2, accuracyM = 15f),
+        )
+        val agg = TripAggregator.aggregate(0, 4_000, jitter, emptyList())
+        assertEquals(0.0, agg.distanceKm!!, 1e-9)
+    }
+
+    @Test
+    fun coarseFixes_areDroppedFromDistance() {
+        // Two very inaccurate fixes far apart must not fabricate distance.
+        val gps = listOf(
+            gps(0, 0.0, 0.0, 40.0, accuracyM = 200f),
+            gps(10, 0.0, 0.01, 40.0, accuracyM = 200f),
+        )
+        assertNull(TripAggregator.aggregate(0, 10_000, gps, emptyList()).distanceKm)
     }
 
     @Test

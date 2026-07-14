@@ -2,8 +2,10 @@ package me.crsib.freecartracker.telemetry.obd.transport
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,6 +13,8 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.crsib.freecartracker.domain.model.ObdTransportKind
+import me.crsib.freecartracker.telemetry.DiagLog
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
@@ -33,19 +37,49 @@ class BluetoothClassicTransport(
     override suspend fun connect() = withContext(Dispatchers.IO) {
         adapter.cancelDiscovery() // discovery slows down / breaks RFCOMM connects
         val device = adapter.getRemoteDevice(address)
-        val s = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-        try {
-            // BluetoothSocket.connect() blocks; to a powered-off / out-of-range adapter it can hang
-            // far longer than the RFCOMM stack's own timeout. Bound it so the recorder can fall back
-            // to RECONNECTING instead of sitting on "Connecting to adapter…" forever. runInterruptible
-            // lets the timeout interrupt the blocking call; closing the socket also aborts it.
-            withTimeout(CONNECT_TIMEOUT_MS) { runInterruptible { s.connect() } }
-        } catch (e: Throwable) {
-            runCatching { s.close() } // release the fd if connect fails (and unblock a hung connect)
-            throw e
+        // Cheap ELM327 clones are unreliable about the SPP service record, so try several ways to
+        // open the RFCOMM channel, in order of preference:
+        //  1. insecure SPP-UUID socket — works for most clones, no bonding/PIN prompt;
+        //  2. secure SPP-UUID socket — some paired adapters only accept the authenticated channel;
+        //  3. reflection socket on channel 1 — the classic fallback for adapters whose SDP lookup
+        //     returns no channel (createRfcommSocketToServiceRecord throws "service discovery failed").
+        val factories = listOf<Pair<String, () -> BluetoothSocket>>(
+            "insecure-uuid" to { device.createInsecureRfcommSocketToServiceRecord(SPP_UUID) },
+            "secure-uuid" to { device.createRfcommSocketToServiceRecord(SPP_UUID) },
+            "reflection-ch1" to { reflectionRfcommSocket(device) },
+        )
+        var lastError: Throwable? = null
+        for ((label, make) in factories) {
+            val s = runCatching { make() }.getOrElse { lastError = it; null } ?: continue
+            try {
+                // BluetoothSocket.connect() blocks; to a powered-off / out-of-range adapter it can
+                // hang far longer than the RFCOMM stack's own timeout. Bound it so the recorder can
+                // fall back to RECONNECTING instead of sitting on "Connecting to adapter…" forever.
+                // runInterruptible lets the timeout interrupt the blocking call; closing the socket
+                // also aborts it.
+                withTimeout(CONNECT_TIMEOUT_MS) { runInterruptible { s.connect() } }
+                socket = s
+                _isConnected.value = true
+                return@withContext
+            } catch (e: TimeoutCancellationException) {
+                // A timeout means the adapter isn't answering at all (off / out of range). Trying
+                // the other socket methods would just burn another timeout each — bail and let the
+                // recorder back off and retry the whole connect.
+                runCatching { s.close() }
+                throw e
+            } catch (e: Throwable) {
+                runCatching { s.close() } // release the fd (and unblock a hung connect) before next method
+                lastError = e
+                DiagLog.w(TAG, "RFCOMM connect via $label failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
         }
-        socket = s
-        _isConnected.value = true
+        throw lastError ?: IOException("RFCOMM connect failed for $address")
+    }
+
+    /** Hidden-API channel-1 socket: the fallback for adapters with no usable SPP service record. */
+    private fun reflectionRfcommSocket(device: BluetoothDevice): BluetoothSocket {
+        val method = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
+        return method.invoke(device, 1) as BluetoothSocket
     }
 
     override suspend fun close() {
@@ -55,6 +89,7 @@ class BluetoothClassicTransport(
     }
 
     companion object {
+        private const val TAG = "BtClassicTransport"
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
         /** Upper bound on a single RFCOMM connect attempt before we give up and reconnect. */

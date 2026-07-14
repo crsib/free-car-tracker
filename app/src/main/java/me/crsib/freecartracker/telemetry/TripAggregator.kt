@@ -22,6 +22,12 @@ object TripAggregator {
      */
     private const val MAX_PLAUSIBLE_ODOMETER_DELTA_KM = 5_000.0
 
+    /** GPS fixes worse than this (metres) are too coarse to trust for distance and are dropped. */
+    private const val GPS_MAX_ACCURACY_M = 50.0
+
+    /** A hop shorter than this (metres) is below the GPS noise floor even for an accurate fix. */
+    private const val GPS_MIN_STEP_M = 8.0
+
     fun aggregate(
         startedAtMillis: Long,
         endedAtMillis: Long,
@@ -80,13 +86,28 @@ object TripAggregator {
         return delta.takeIf { it > 0.0 && it <= MAX_PLAUSIBLE_ODOMETER_DELTA_KM }
     }
 
+    /**
+     * Sum of haversine hops along the GPS track, gated against stationary jitter. A phone sitting
+     * still (a false auto-start next to an always-powered OBD port, or a phone-as-key walk-by) still
+     * emits a fix every second, each a few metres off the last; summed raw that inflates into
+     * hundreds of phantom metres and reads as a real trip. So we drop untrustworthy fixes, ignore a
+     * hop shorter than the fixes' own accuracy (indistinguishable from noise), and skip hops where
+     * both endpoints report a below-walking GPS speed (parked, not travelling).
+     */
     private fun gpsDistanceKm(gps: List<GpsPoint>): Double? {
-        if (gps.size < 2) return null
+        val pts = gps.filter { (it.accuracyM ?: 0f) <= GPS_MAX_ACCURACY_M }
+        if (pts.size < 2) return null
         var total = 0.0
-        for (i in 1 until gps.size) {
-            val a = gps[i - 1]
-            val b = gps[i]
-            total += DerivedMetrics.haversineKm(a.latitude, a.longitude, b.latitude, b.longitude)
+        for (i in 1 until pts.size) {
+            val a = pts[i - 1]
+            val b = pts[i]
+            val sa = a.speedKmh
+            val sb = b.speedKmh
+            if (sa != null && sb != null && sa < MOVING_THRESHOLD_KMH && sb < MOVING_THRESHOLD_KMH) continue
+            val stepKm = DerivedMetrics.haversineKm(a.latitude, a.longitude, b.latitude, b.longitude)
+            val floorM = maxOf(GPS_MIN_STEP_M, (a.accuracyM ?: 0f).toDouble(), (b.accuracyM ?: 0f).toDouble())
+            if (stepKm * 1000.0 < floorM) continue
+            total += stepKm
         }
         return total
     }

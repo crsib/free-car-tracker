@@ -76,8 +76,14 @@ class TripRecorder(
     /** When the OBD link first dropped (null while connected); drives auto-end. */
     @Volatile private var obdLostSince: Long? = null
 
+    /** Last time GPS showed the vehicle actually moving; gates auto-end so a drive isn't cut short. */
+    @Volatile private var lastMovingAt: Long = 0
+
     /** Set when CompanionDeviceManager reports the adapter left BT range — shortens auto-end grace. */
     @Volatile private var presenceLost: Boolean = false
+
+    /** True once OBD has connected at least once this session — gates the shortened auto-end grace. */
+    @Volatile private var everConnected: Boolean = false
 
     private val bufferMutex = Mutex()
     private val obdBuffer = mutableListOf<ObdSample>()
@@ -128,7 +134,9 @@ class TripRecorder(
         startedAt = clock()
         lastFix = null
         obdLostSince = null
+        lastMovingAt = 0
         presenceLost = false
+        everConnected = false
         resetBuffers()
         val id = telemetryRepo.startTrip(
             Trip(
@@ -164,11 +172,18 @@ class TripRecorder(
         val profile = PidProfileRegistry.select(vehicle)
         val odometerDef = profile.pids.firstOrNull { it.key == "odometerKm" }
         var backoffMs = INITIAL_BACKOFF_MS
+        var firstAttempt = true
         while (coroutineContext.isActive) {
             var transport: ObdTransport? = null
             var session: ObdSession? = null
             try {
                 _recordingState.value = RecordingState.CONNECTING
+                // On a cold companion wake the BT ACL link has only just come up; the adapter's
+                // firmware needs a beat before it accepts an RFCOMM connection. Connecting the
+                // instant we're woken races that and fails intermittently ("connection refused"),
+                // so let the link settle before the first attempt. Retries already wait via backoff.
+                if (firstAttempt && config.kind == ObdTransportKind.BT_CLASSIC) delay(BT_SETTLE_MS)
+                firstAttempt = false
                 transport = transportFactory.create(config)
                 transport.connect()
                 session = ObdSession(transport)
@@ -185,6 +200,7 @@ class TripRecorder(
                 _recordingState.value = RecordingState.RECORDING
                 _liveState.update { it.copy(obdConnected = true) }
                 obdLostSince = null
+                everConnected = true
                 backoffMs = INITIAL_BACKOFF_MS
                 // Grab the odometer immediately, so the trip's first odometer sample marks the start
                 // of the connected window instead of lagging until the SLOW round-robin reaches it —
@@ -220,8 +236,17 @@ class TripRecorder(
         while (coroutineContext.isActive) {
             delay(AUTO_END_CHECK_MS)
             val since = obdLostSince ?: continue
-            val grace = if (presenceLost) AUTO_END_GRACE_AFTER_DISAPPEAR_MS else AUTO_END_GRACE_MS
-            if (clock() - since >= grace) {
+            // The shortened "adapter left range" grace only applies once we've actually connected
+            // (a real drive that's now ending). Before the first connect a presence blip is likely
+            // negotiation noise, so keep the full grace and give OBD a proper chance to come up.
+            val grace = if (presenceLost && everConnected) AUTO_END_GRACE_AFTER_DISAPPEAR_MS else AUTO_END_GRACE_MS
+            // End only when the OBD link has been down long enough AND the vehicle isn't still
+            // moving. Without the movement gate, a drive where OBD never connects (flaky adapter,
+            // tunnel) gets cut off mid-trip after the grace. With no GPS at all, lastMovingAt stays
+            // 0, so the gate is satisfied and an OBD-only park still ends as before.
+            val obdDownLongEnough = clock() - since >= grace
+            val stationaryLongEnough = clock() - lastMovingAt >= grace
+            if (obdDownLongEnough && stationaryLongEnough) {
                 stop()
                 return
             }
@@ -273,6 +298,11 @@ class TripRecorder(
                 DerivedMetrics.haversineKm(prev.latitude, prev.longitude, fix.latitude, fix.longitude)
             } else {
                 0.0
+            }
+            // Note real movement for the auto-end gate. GPS doppler speed is the reliable signal;
+            // the distance fallback uses a coarse threshold so per-fix jitter can't fake motion.
+            if ((fix.speedKmh ?: 0.0) >= MOVING_THRESHOLD_KMH || added * 1000.0 >= GPS_MOVE_M) {
+                lastMovingAt = clock()
             }
             lastFix = fix
             _liveState.update {
@@ -416,7 +446,7 @@ class TripRecorder(
         } else {
             EMPTY_AGGREGATES
         }
-        if (isTrivialSession(startedAt, data, agg.distanceKm)) {
+        if (isTrivialSession(agg, data)) {
             // A false auto-start / brief adapter blip: drop the junk trip instead of finalizing it.
             runCatching { telemetryRepo.deleteTrip(id) }
             tripId = null
@@ -432,19 +462,20 @@ class TripRecorder(
     }
 
     /**
-     * True for a "session" not worth keeping: a false auto-start or a momentary adapter blip that
-     * recorded almost no data. Judged by the span of the recorded samples (last timestamp − start)
-     * rather than [startedAt]→ended, because an auto-ended trip's end time includes the multi-minute
-     * OBD-loss grace and would make even an empty session look long. A trip that actually covered
-     * distance is always kept, however brief.
+     * True for a "session" not worth keeping: a false auto-start (phone-as-key walk-by, or an
+     * always-powered OBD port that connects the moment you're near the car) that never became a
+     * real drive. Duration is *not* a keep signal — a walk-by logs GPS for the whole auto-end grace
+     * — and neither is a handful of OBD samples, which a parked-but-powered adapter produces too.
+     * Only genuine activity keeps a trip: real ground movement, fuel/energy actually consumed, or a
+     * running engine (RPM). The last covers ICE idling; EVs (no RPM) fall to movement/energy.
      */
-    private fun isTrivialSession(startedAt: Long, data: me.crsib.freecartracker.telemetry.data.TripData?, distanceKm: Double?): Boolean {
-        if ((distanceKm ?: 0.0) >= MIN_TRIP_KM) return false
-        val lastSample = maxOf(
-            data?.obdSamples?.lastOrNull()?.timestampMillis ?: startedAt,
-            data?.gpsPoints?.lastOrNull()?.timestampMillis ?: startedAt,
-        )
-        return lastSample - startedAt < MIN_TRIP_MILLIS
+    private fun isTrivialSession(agg: TripAggregates, data: me.crsib.freecartracker.telemetry.data.TripData?): Boolean {
+        val moved = (agg.distanceKm ?: 0.0) >= MIN_TRIP_KM ||
+            (agg.maxSpeedKmh ?: 0.0) >= MIN_TRIP_SPEED_KMH
+        val consumed = (agg.fuelUsedL ?: 0.0) >= MIN_TRIP_FUEL_L ||
+            kotlin.math.abs(agg.energyUsedKwh ?: 0.0) >= MIN_TRIP_ENERGY_KWH
+        val engineRan = data?.obdSamples?.any { (it.rpm ?: 0.0) >= MIN_TRIP_RPM } == true
+        return !(moved || consumed || engineRan)
     }
 
     private suspend fun resetBuffers() = bufferMutex.withLock {
@@ -473,7 +504,7 @@ class TripRecorder(
                     } else {
                         EMPTY_AGGREGATES
                     }
-                    if (isTrivialSession(orphan.startedAtMillis, data, agg.distanceKm)) {
+                    if (isTrivialSession(agg, data)) {
                         telemetryRepo.deleteTrip(orphan.id)
                     } else {
                         telemetryRepo.finalizeTrip(orphan.id, TripStatus.ABORTED, ended, agg)
@@ -493,9 +524,21 @@ class TripRecorder(
         const val INITIAL_BACKOFF_MS = 1000L
         const val MAX_BACKOFF_MS = 15_000L
 
-        /** Below this recorded data span AND distance, a session is a false start and is discarded. */
-        const val MIN_TRIP_MILLIS = 10_000L
+        /** Let a freshly-woken BT link settle before the first RFCOMM connect (avoids the ACL race). */
+        const val BT_SETTLE_MS = 3000L
+
+        /** Thresholds distinguishing a real drive from a false auto-start (see [isTrivialSession]). */
         const val MIN_TRIP_KM = 0.2
+        const val MIN_TRIP_SPEED_KMH = 5.0
+        const val MIN_TRIP_FUEL_L = 0.05
+        const val MIN_TRIP_ENERGY_KWH = 0.05
+        const val MIN_TRIP_RPM = 300.0
+
+        /** Speed (km/h) at/above which GPS is treated as real movement (matches TripAggregator). */
+        const val MOVING_THRESHOLD_KMH = 3.0
+
+        /** Per-fix ground distance (m) that counts as movement when GPS speed is absent. */
+        const val GPS_MOVE_M = 15.0
 
         /** Auto-end watchdog cadence and grace periods (sustained OBD loss → finalize the trip). */
         const val AUTO_END_CHECK_MS = 15_000L

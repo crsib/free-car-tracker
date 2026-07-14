@@ -71,7 +71,8 @@ class TripRecorderIntegrationTest {
 
             recorder.start(vehicleId, config)
             withTimeout(15_000) { recorder.recordingState.first { it == RecordingState.RECORDING } }
-            // Record past the trivial-session floor (10 s span) so the trip is kept, not dropped.
+            // Record long enough to gather OBD samples. The emulated ICE car reports a running
+            // engine (RPM > 0), which keeps the trip out of the trivial-session discard.
             delay(12_000)
             recorder.stop()
             withTimeout(10_000) { recorder.recordingState.first { it == RecordingState.IDLE } }
@@ -88,7 +89,7 @@ class TripRecorderIntegrationTest {
     }
 
     /**
-     * A sub-threshold session — no distance and under the 10 s data-span floor — must be discarded
+     * A session with no real activity — no distance, no OBD, no running engine — must be discarded
      * rather than saved as a junk trip (false auto-start / brief adapter blip). Uses a GPS-only
      * (NONE transport) session so it needs neither the emulator nor a location fix.
      */
