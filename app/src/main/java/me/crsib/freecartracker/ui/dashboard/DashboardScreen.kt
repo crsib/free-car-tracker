@@ -1,7 +1,6 @@
 package me.crsib.freecartracker.ui.dashboard
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -47,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.prefs.AppPreferences
+import me.crsib.freecartracker.domain.EnergyCostShare
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.Powertrain
@@ -55,14 +54,16 @@ import me.crsib.freecartracker.ui.components.TripChart
 import me.crsib.freecartracker.ui.components.VehicleSwitcher
 import me.crsib.freecartracker.ui.components.rememberChartSync
 import me.crsib.freecartracker.ui.containerViewModel
+import me.crsib.freecartracker.ui.entries.EntryCard
 import me.crsib.freecartracker.ui.util.costBucketLabel
 import me.crsib.freecartracker.ui.util.formatDate
 import me.crsib.freecartracker.ui.util.formatMoney
+import me.crsib.freecartracker.ui.util.formatMoneyPrecise
 import me.crsib.freecartracker.ui.util.formatNumber
 import me.crsib.freecartracker.ui.util.icon
+import me.crsib.freecartracker.ui.util.label
 import me.crsib.freecartracker.ui.util.windowLabel
 import me.crsib.freecartracker.ui.util.windowMenuLabel
-import kotlin.math.roundToLong
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -176,6 +177,12 @@ fun DashboardScreen(
                 }
             }
 
+            if (state.energyCostShares.isNotEmpty()) {
+                item {
+                    CostPerDistanceCard(state = state, vehicle = vehicle)
+                }
+            }
+
             item {
                 PeriodStatsCard(state = state, vehicle = vehicle)
             }
@@ -253,9 +260,10 @@ fun DashboardScreen(
             } else {
                 items(state.recent.size) { idx ->
                     val item = state.recent[idx]
-                    RecentRow(
+                    EntryCard(
                         item = item,
                         onClick = { onEditEntry(vehicle.id, item.kind, item.id) },
+                        onDelete = { vm.delete(item) },
                     )
                 }
             }
@@ -274,7 +282,7 @@ private fun costPerDistanceLabel(
     } else {
         costPerKmMinor
     }
-    return formatMoney(perDisplay.roundToLong(), vehicle.currency)
+    return formatMoneyPrecise(perDisplay, vehicle.currency)
 }
 
 @Composable
@@ -429,25 +437,76 @@ private fun KpiCard(title: String, value: String, unit: String, modifier: Modifi
     }
 }
 
+/**
+ * Running cost per distance unit, split by energy source. Each row is that source's spend over
+ * the whole window distance — a car cannot say which kilometres ran on which fuel — so the rows
+ * add up to the "Fuel & electricity" total below them.
+ */
 @Composable
-private fun RecentRow(item: RecentItem, onClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                item.kind.icon(),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+private fun CostPerDistanceCard(state: DashboardUiState, vehicle: Vehicle) {
+    val system = vehicle.unitSystem
+    val dUnit = UnitConversions.distanceUnit(system)
+
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "Cost per $dUnit (${windowLabel(state.windowDays)})",
+                style = MaterialTheme.typography.labelLarge,
             )
-            Column(Modifier.weight(1f)) {
-                Text(costBucketLabel(item.title), fontWeight = FontWeight.Medium)
-                Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
+            Text(
+                "What each energy source adds to every $dUnit driven",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            state.energyCostShares.forEach { share ->
+                EnergyCostRow(share = share, vehicle = vehicle)
             }
-            Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
+            HorizontalDivider(Modifier.padding(top = 12.dp))
+            StatRow(
+                "Fuel & electricity",
+                costPerDistanceLabel(state.energyCostPerKmMinor, vehicle, system),
+            )
+            StatRow(
+                "All costs (incl. expenses)",
+                costPerDistanceLabel(state.costPerKmMinor, vehicle, system),
+            )
         }
+    }
+}
+
+@Composable
+private fun EnergyCostRow(share: EnergyCostShare, vehicle: Vehicle) {
+    val system = vehicle.unitSystem
+    val quantity = if (share.source.kind == EntryKind.CHARGE) {
+        "${formatNumber(share.quantity, 1)} kWh"
+    } else {
+        "${formatNumber(UnitConversions.litresToDisplay(share.quantity, system), 1)} " +
+            UnitConversions.volumeUnit(system)
+    }
+
+    Row(
+        Modifier.fillMaxWidth().padding(top = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            share.source.kind.icon(),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(share.source.label(), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "$quantity · ${formatMoney(share.spentMinor, vehicle.currency)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            costPerDistanceLabel(share.costPerKmMinor, vehicle, system),
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

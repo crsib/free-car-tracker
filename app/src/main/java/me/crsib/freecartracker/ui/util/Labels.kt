@@ -1,6 +1,8 @@
 package me.crsib.freecartracker.ui.util
 
+import me.crsib.freecartracker.domain.EnergySource
 import me.crsib.freecartracker.domain.model.ChargeType
+import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.ExpenseCategory
 import me.crsib.freecartracker.domain.model.FuelType
 import me.crsib.freecartracker.domain.model.Powertrain
@@ -21,6 +23,12 @@ fun FuelType.label(): String = when (this) {
     FuelType.CNG -> "CNG"
     FuelType.ETHANOL -> "Ethanol"
     FuelType.OTHER -> "Other"
+}
+
+/** Name of an energy source: the fuel type, "Electricity", or plain "Fuel" when untyped. */
+fun EnergySource.label(): String = when {
+    kind == EntryKind.CHARGE -> "Electricity"
+    else -> fuelType?.label() ?: "Fuel"
 }
 
 fun ChargeType.label(): String = when (this) {

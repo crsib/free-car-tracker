@@ -16,20 +16,17 @@ import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.repository.EntryRepository
 import me.crsib.freecartracker.domain.ChargePoint
 import me.crsib.freecartracker.domain.EconomyCalculator
+import me.crsib.freecartracker.domain.EnergyCostCalculator
+import me.crsib.freecartracker.domain.EnergyCostShare
+import me.crsib.freecartracker.domain.EnergyPurchase
+import me.crsib.freecartracker.domain.EnergySource
 import me.crsib.freecartracker.domain.FuelPoint
 import me.crsib.freecartracker.domain.RecurrenceProjector
 import me.crsib.freecartracker.domain.model.EntryKind
+import me.crsib.freecartracker.ui.entries.EntryCardItem
+import me.crsib.freecartracker.ui.entries.EntryCards
 
 data class TrendPoint(val dateMillis: Long, val litresPer100Km: Double)
-
-data class RecentItem(
-    val kind: EntryKind,
-    val id: Long,
-    val dateMillis: Long,
-    val title: String,
-    val amountMinor: Long,
-    val currency: String,
-)
 
 data class DashboardUiState(
     val loading: Boolean = true,
@@ -48,9 +45,13 @@ data class DashboardUiState(
     val windowSegmentElectricKwh100: List<Double> = emptyList(),
     val totalSpendMinor: Long = 0,
     val costPerKmMinor: Double? = null,
+    /** Cost per km of fuel + electricity only (no other expenses). */
+    val energyCostPerKmMinor: Double? = null,
+    /** Cost per km contributed by each fuel type and by electricity, biggest spender first. */
+    val energyCostShares: List<EnergyCostShare> = emptyList(),
     val buckets: List<CategoryTotal> = emptyList(),
     val trend: List<TrendPoint> = emptyList(),
-    val recent: List<RecentItem> = emptyList(),
+    val recent: List<EntryCardItem> = emptyList(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -99,13 +100,25 @@ class DashboardViewModel(
             }
             val windowDistance = EconomyCalculator.distanceSpanKm(windowOdos)
 
+            val windowFuel = fuel.filter { it.dateMillis in since..now }
+            val windowCharge = charge.filter { it.dateMillis in since..now }
             val windowFuelL = fuel.filter { it.dateMillis >= since }.sumOf { it.volumeL }
             val windowKwh = charge.filter { it.dateMillis >= since }.sumOf { it.energyKwh }
 
+            // Running cost split by energy source: one entry per fuel type plus electricity.
+            val purchases = buildList {
+                windowFuel.forEach {
+                    add(EnergyPurchase(EnergySource.fuel(it.fuelType), it.totalCostMinor, it.volumeL))
+                }
+                windowCharge.forEach {
+                    add(EnergyPurchase(EnergySource.ELECTRICITY, it.totalCostMinor, it.energyKwh))
+                }
+            }
+
             // Windowed spend. Recurring expenses (e.g. monthly financing) are expanded so each
             // billing date in the window counts, even though the entry was logged only once.
-            val fuelCost = fuel.filter { it.dateMillis in since..now }.sumOf { it.totalCostMinor }
-            val chargeCost = charge.filter { it.dateMillis in since..now }.sumOf { it.totalCostMinor }
+            val fuelCost = windowFuel.sumOf { it.totalCostMinor }
+            val chargeCost = windowCharge.sumOf { it.totalCostMinor }
             val expenseBuckets = LinkedHashMap<String, Long>()
             expenses.forEach { e ->
                 val bills = RecurrenceProjector.occurrencesInWindow(
@@ -151,9 +164,11 @@ class DashboardViewModel(
                 windowSegmentElectricKwh100 = windowElectricEconomies,
                 totalSpendMinor = total,
                 costPerKmMinor = EconomyCalculator.costPerKmMinor(total, windowDistance),
+                energyCostPerKmMinor = EnergyCostCalculator.totalCostPerKmMinor(purchases, windowDistance),
+                energyCostShares = EnergyCostCalculator.breakdown(purchases, windowDistance),
                 buckets = buckets,
                 trend = trend,
-                recent = recentItems(fuel, charge, expenses, vehicle),
+                recent = EntryCards.build(vehicle, fuel, charge, expenses).take(8),
             )
         }
 
@@ -161,23 +176,11 @@ class DashboardViewModel(
 
     fun setWindowDays(days: Int) = viewModelScope.launch { prefs.setDashboardWindowDays(days) }
 
-    private fun recentItems(
-        fuel: List<me.crsib.freecartracker.data.entity.FuelEntry>,
-        charge: List<me.crsib.freecartracker.data.entity.ChargeEntry>,
-        expenses: List<me.crsib.freecartracker.data.entity.Expense>,
-        vehicle: Vehicle,
-    ): List<RecentItem> {
-        val items = buildList {
-            fuel.forEach {
-                add(RecentItem(EntryKind.FUEL, it.id, it.dateMillis, "Fuel", it.totalCostMinor, it.currency))
-            }
-            charge.forEach {
-                add(RecentItem(EntryKind.CHARGE, it.id, it.dateMillis, "Charge", it.totalCostMinor, it.currency))
-            }
-            expenses.forEach {
-                add(RecentItem(EntryKind.EXPENSE, it.id, it.dateMillis, it.category.name, it.totalCostMinor, it.currency))
-            }
+    fun delete(item: EntryCardItem) = viewModelScope.launch {
+        when (item.kind) {
+            EntryKind.FUEL -> entryRepo.deleteFuel(item.id)
+            EntryKind.CHARGE -> entryRepo.deleteCharge(item.id)
+            EntryKind.EXPENSE -> entryRepo.deleteExpense(item.id)
         }
-        return items.sortedByDescending { it.dateMillis }.take(8)
     }
 }

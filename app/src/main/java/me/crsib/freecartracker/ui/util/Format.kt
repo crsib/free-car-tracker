@@ -1,6 +1,7 @@
 package me.crsib.freecartracker.ui.util
 
 import me.crsib.freecartracker.domain.Money
+import java.math.BigDecimal
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -26,6 +27,29 @@ fun formatMoney(minor: Long, currencyCode: String): String {
     val nf = NumberFormat.getCurrencyInstance(Locale.getDefault())
     runCatching { nf.currency = Currency.getInstance(currencyCode) }
     return nf.format(Money.minorToMajor(minor, currencyCode))
+}
+
+/**
+ * Format a fractional minor-unit amount (a cost per km, say) as money. A per-distance cost is
+ * often a fraction of a cent, so small amounts keep extra fraction digits rather than rounding
+ * away to nothing.
+ */
+fun formatMoneyPrecise(minor: Double, currencyCode: String): String {
+    val digits = Money.fractionDigits(currencyCode)
+    // Widen by magnitude, so every amount keeps roughly three significant digits: enough to
+    // separate a cheap kilometre from an expensive one without inventing precision.
+    val magnitude = kotlin.math.abs(minor)
+    val extra = when {
+        magnitude < 10.0 -> 2
+        magnitude < 100.0 -> 1
+        else -> 0
+    }
+    val nf = NumberFormat.getCurrencyInstance(Locale.getDefault())
+    // Setting the currency resets the fraction digits to its default, so widen them after.
+    runCatching { nf.currency = Currency.getInstance(currencyCode) }
+    nf.maximumFractionDigits = digits + extra
+    nf.minimumFractionDigits = digits
+    return nf.format(BigDecimal(minor).movePointLeft(digits))
 }
 
 /** Short label for a dashboard window length, e.g. "30d" or "All time". */
