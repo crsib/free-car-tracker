@@ -43,6 +43,7 @@ import me.crsib.freecartracker.ui.util.formatDate
 fun WebDavScreen(onBack: () -> Unit) {
     val vm = containerViewModel { c -> WebDavViewModel(c.webDavSyncManager) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
 
@@ -121,6 +122,7 @@ fun WebDavScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            SyncStatusLine(syncStatus)
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(

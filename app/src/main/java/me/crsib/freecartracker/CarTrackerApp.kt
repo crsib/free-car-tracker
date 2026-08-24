@@ -44,8 +44,10 @@ class CarTrackerApp : Application() {
                 DiagLog.i("ObdAutoStart", "onCreate re-arm: autoStart disabled — not observing")
             }
         }
-        // Re-arm the daily WebDAV backup if the user has enabled it.
+        // Re-arm the daily WebDAV backup if the user has enabled it, and clear any sync one-shot
+        // left parked by the old unbounded backoff (once) so triggers below aren't swallowed.
         runCatching {
+            WebDavBackupWorker.recoverStalledWork(this)
             if (container.webDavSyncManager.config().autoBackup) {
                 WebDavBackupWorker.schedule(this)
             }

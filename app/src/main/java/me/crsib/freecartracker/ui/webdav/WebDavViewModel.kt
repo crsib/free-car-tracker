@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import me.crsib.freecartracker.data.webdav.SyncStatus
 import me.crsib.freecartracker.data.webdav.WebDavConfig
 import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 
@@ -31,6 +32,9 @@ class WebDavViewModel(
 
     private val _state = MutableStateFlow(WebDavFormState())
     val state: StateFlow<WebDavFormState> = _state.asStateFlow()
+
+    /** Live sync step, so this screen shows background worker progress while it is open. */
+    val syncStatus: StateFlow<SyncStatus> = manager.status
 
     init {
         val cfg = manager.config()

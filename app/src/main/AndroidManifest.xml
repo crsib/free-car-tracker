@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -30,6 +31,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- WebDAV sync runs as a long-running worker: a backlog of trips takes longer than the
+         10-minute cap on an ordinary worker, and without a foreground service the upload dies
+         the moment the device sleeps. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
@@ -62,6 +67,13 @@
             android:name=".telemetry.service.TelemetryService"
             android:exported="false"
             android:foregroundServiceType="location|connectedDevice" />
+
+        <!-- WorkManager's own foreground-service host. Declared here only to add the dataSync
+             type, which Android 14+ requires before setForeground() will be honoured. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- Woken by the OS when the associated ELM327 adapter comes into range. -->
         <service

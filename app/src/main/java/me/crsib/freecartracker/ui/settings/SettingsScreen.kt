@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import me.crsib.freecartracker.data.backup.RestoreMode
 import me.crsib.freecartracker.data.prefs.ThemeMode
 import me.crsib.freecartracker.ui.containerViewModel
+import me.crsib.freecartracker.ui.webdav.SyncStatusLine
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +52,7 @@ fun SettingsScreen(
     }
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val syncBusy by vm.syncBusy.collectAsStateWithLifecycle()
+    val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -208,12 +210,11 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Button(
-                        onClick = {
-                            scope.launch { snackbar.showSnackbar(vm.syncNow(System.currentTimeMillis())) }
-                        },
+                        onClick = { vm.requestSync(context) },
                         enabled = vm.isWebDavConfigured && !syncBusy,
                         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                    ) { Text("Sync now") }
+                    ) { Text(if (syncBusy) "Syncing…" else "Sync now") }
+                    SyncStatusLine(syncStatus)
                     OutlinedButton(
                         onClick = onOpenWebDav,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),

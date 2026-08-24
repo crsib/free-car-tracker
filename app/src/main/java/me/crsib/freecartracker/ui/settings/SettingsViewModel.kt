@@ -2,11 +2,10 @@ package me.crsib.freecartracker.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.crsib.freecartracker.data.VehicleSelection
@@ -14,6 +13,9 @@ import me.crsib.freecartracker.data.backup.BackupRepository
 import me.crsib.freecartracker.data.backup.RestoreMode
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.prefs.ThemeMode
+import android.content.Context
+import me.crsib.freecartracker.data.webdav.SyncStatus
+import me.crsib.freecartracker.data.webdav.WebDavBackupWorker
 import me.crsib.freecartracker.data.webdav.WebDavSyncManager
 
 class SettingsViewModel(
@@ -30,8 +32,18 @@ class SettingsViewModel(
             ThemeMode.SYSTEM,
         )
 
-    private val _syncBusy = MutableStateFlow(false)
-    val syncBusy: StateFlow<Boolean> = _syncBusy.asStateFlow()
+    /** Live step of whatever sync is running, or the last outcome. Shown under the Sync now button. */
+    val syncStatus: StateFlow<SyncStatus> = webDav.status
+
+    /**
+     * Derived from the shared manager status rather than tracked locally, so the button is also
+     * disabled while the *background worker* is mid-run — otherwise tapping it would start a second
+     * run against the same server.
+     */
+    val syncBusy: StateFlow<Boolean> =
+        webDav.status
+            .map { it is SyncStatus.Running }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** True when a WebDAV server is configured and a sync can be triggered. */
     val isWebDavConfigured: Boolean get() = webDav.config().isConfigured
@@ -39,19 +51,13 @@ class SettingsViewModel(
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch { prefs.setThemeMode(mode) }
 
     /**
-     * Run a manual bidirectional sync with the same path the worker uses. Returns a
-     * human-readable result message for the snackbar.
+     * Request a sync. This *enqueues the worker* rather than running the sync in [viewModelScope]:
+     * a UI coroutine is killed when the device sleeps, which is exactly when a long backlog upload
+     * was dying. The worker promotes itself to a foreground service and survives screen-off.
+     * Progress and the outcome arrive on [syncStatus].
      */
-    suspend fun syncNow(now: Long): String {
-        _syncBusy.value = true
-        return try {
-            webDav.syncNow(now).fold(
-                onSuccess = { report -> "Synced. ${report.summary()}" },
-                onFailure = { e -> "Sync failed: ${e.message}" },
-            )
-        } finally {
-            _syncBusy.value = false
-        }
+    fun requestSync(context: Context) {
+        WebDavBackupWorker.enqueueNow(context, manual = true)
     }
 
     suspend fun buildJson(now: Long): String = backup.exportJson(now)

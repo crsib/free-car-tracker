@@ -34,10 +34,23 @@ data class DavEntry(
  */
 class WebDavClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .readTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .writeTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build(),
 ) {
+    /**
+     * Trip payloads are a different class of transfer from the small JSON documents: a 10 Hz
+     * `obd.csv.gz` for a long drive is tens of megabytes, and on a weak mobile uplink a single
+     * socket write can stall well past a minute without the transfer being dead. Observed on the
+     * Honor: whole trips still aborting with `SocketTimeoutException` at a 60s write timeout.
+     * Shares the parent's connection pool and dispatcher, so this costs nothing but the config.
+     */
+    private val largeTransferClient: OkHttpClient = client.newBuilder()
+        .readTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+        .writeTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+        .build()
+
     private val jsonMedia = "application/json".toMediaType()
     private val gzipMedia = "application/gzip".toMediaType()
 
@@ -68,13 +81,24 @@ class WebDavClient(
     /**
      * Create [relPath] and every missing parent collection, segment by segment, as
      * Apache/Nextcloud require (they 409 on a PUT/MKCOL whose parent is absent).
+     *
+     * Pass [created] to memoize prefixes already handled: uploading 61 trips walks
+     * `{car}/trips/YYYY/MM/` afresh every time, so four of the five MKCOLs per trip are pure
+     * round-trip cost against a folder that demonstrably exists. Scope the set to one sync run —
+     * caching it longer would miss a folder deleted on the server between runs.
      */
-    suspend fun ensureCollection(config: WebDavConfig, relPath: String): Result<Unit> = runCatching {
+    suspend fun ensureCollection(
+        config: WebDavConfig,
+        relPath: String,
+        created: MutableSet<String>? = null,
+    ): Result<Unit> = runCatching {
         val segments = relPath.trim('/').split('/').filter { it.isNotEmpty() }
         val prefix = StringBuilder()
         for (seg in segments) {
             prefix.append(seg).append('/')
-            mkcol(config, prefix.toString()).getOrThrow()
+            val path = prefix.toString()
+            if (created != null && !created.add(path)) continue
+            mkcol(config, path).getOrThrow()
         }
     }
 
@@ -115,17 +139,22 @@ class WebDavClient(
         relPath: String,
         bytes: ByteArray,
         media: okhttp3.MediaType = jsonMedia,
+        http: OkHttpClient = client,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            client.newCall(authed(config, absUrl(config, relPath)).put(bytes.toRequestBody(media)).build())
+            http.newCall(authed(config, absUrl(config, relPath)).put(bytes.toRequestBody(media)).build())
                 .execute().use { r -> check(r.isSuccessful) { "PUT $relPath -> ${r.code}" } }
         }
     }
 
     /** GET raw bytes, or null if the resource is missing (404). */
-    suspend fun getBytes(config: WebDavConfig, relPath: String): Result<ByteArray?> = withContext(Dispatchers.IO) {
+    suspend fun getBytes(
+        config: WebDavConfig,
+        relPath: String,
+        http: OkHttpClient = client,
+    ): Result<ByteArray?> = withContext(Dispatchers.IO) {
         runCatching {
-            client.newCall(authed(config, absUrl(config, relPath)).get().build()).execute().use { r ->
+            http.newCall(authed(config, absUrl(config, relPath)).get().build()).execute().use { r ->
                 if (r.code == 404) null
                 else { check(r.isSuccessful) { "GET $relPath -> ${r.code}" }; r.body?.bytes() }
             }
@@ -144,13 +173,23 @@ class WebDavClient(
         }
     }
 
-    /** gzip [plain] and PUT it (for the large `.gz` trip files). */
+    /** gzip [plain] and PUT it (for the large `.gz` trip files), on the long-timeout client. */
     suspend fun putGzip(config: WebDavConfig, relPath: String, plain: ByteArray): Result<Unit> =
-        putBytes(config, relPath, gzip(plain), gzipMedia)
+        putBytes(config, relPath, gzip(plain), gzipMedia, largeTransferClient)
 
-    /** GET and gunzip, or null if missing. */
+    /**
+     * gzip [plain] without uploading it, for a caller that needs the on-wire size up front (to show
+     * progress) and would otherwise have to compress the same bytes twice. Pair with [putGzipped].
+     */
+    fun gzipped(plain: ByteArray): ByteArray = gzip(plain)
+
+    /** PUT bytes already compressed by [gzipped], on the long-timeout client. */
+    suspend fun putGzipped(config: WebDavConfig, relPath: String, gz: ByteArray): Result<Unit> =
+        putBytes(config, relPath, gz, gzipMedia, largeTransferClient)
+
+    /** GET and gunzip, or null if missing. On the long-timeout client — these are the big files. */
     suspend fun getGunzip(config: WebDavConfig, relPath: String): Result<ByteArray?> =
-        getBytes(config, relPath).map { it?.let(::gunzip) }
+        getBytes(config, relPath, largeTransferClient).map { it?.let(::gunzip) }
 
     // --- Legacy single-file API (still used by the current backup manager; removed in the sync rewrite) ---
 
@@ -232,6 +271,19 @@ class WebDavClient(
     }.getOrNull()
 
     companion object {
+        private const val CONNECT_TIMEOUT_SECONDS = 15L
+
+        /**
+         * Applies to reads *and* writes. OkHttp defaults both to 10s; leaving the write side at the
+         * default meant a multi-MB gzipped `obd.csv.gz` PUT over a weak head-unit uplink aborted with
+         * a SocketTimeoutException long before it finished, which is what "sync fails with timeout"
+         * actually was. These are per-socket-operation timeouts, not a cap on the whole transfer.
+         */
+        private const val IO_TIMEOUT_SECONDS = 60L
+
+        /** Per-socket-operation ceiling for the multi-MB trip files. See [largeTransferClient]. */
+        private const val LARGE_TRANSFER_TIMEOUT_MINUTES = 5L
+
         private const val DAV_NS = "DAV:"
         private val PROPFIND_BODY =
             """<?xml version="1.0" encoding="utf-8"?>""" +
