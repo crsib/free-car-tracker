@@ -1,0 +1,68 @@
+# /etc/systemd/system/fct-viewer.service
+#
+# The viewer needs no privilege at all: it reads a remote WebDAV server over HTTPS and
+# writes only its own config and cache. That makes it a much smaller target than the
+# other-service dashboard, which has to escalate to reload other-service — so unlike that unit,
+# NoNewPrivileges stays on and ProtectSystem can be strict.
+#
+# Containment that actually matters here is the source-IP allowlist: the process holds
+# WebDAV credentials, so only the SSO reverse proxy should be able to reach the port.
+[Unit]
+Description=Car Tracker viewer (WebDAV telemetry dashboard)
+Documentation=https://github.com/crsib/free-car-tracker/tree/master/viewer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fctviewer
+Group=fctviewer
+
+# Optional: pre-seed the WebDAV target. Leave the file absent and configure the server
+# through the UI instead — that way the app password is never typed on a command line
+# or stored anywhere but the 0600 config this service writes.
+EnvironmentFile=-/etc/fct-viewer/env
+
+# -open=false: there is no browser here.
+# -allow-from: proxy/Traefik on .22, plus the container itself for health checks.
+# -cache-max: trip payloads are the only thing that grows; evict least-recently-used
+#             rather than filling the rootfs. Summaries and the catalog are never evicted,
+#             so cross-trip analysis survives eviction of the raw files it came from.
+ExecStart=/usr/local/bin/fct-viewer \
+    -addr 0.0.0.0:8420 \
+    -allow-from 127.0.0.1,::1,192.0.2.22,192.0.2.24 \
+    -config /etc/fct-viewer/config.json \
+    -cache /var/lib/fct-viewer \
+    -cache-max 6GB \
+    -open=false
+
+Restart=on-failure
+RestartSec=3
+
+# --- Hardening ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# The only two writable paths, both created and chowned by systemd.
+ConfigurationDirectory=fct-viewer
+ConfigurationDirectoryMode=0700
+StateDirectory=fct-viewer
+StateDirectoryMode=0750
+
+# Headroom for parsing one large obd.csv plus a streaming zip export, well inside the
+# container's 1 GB ceiling.
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

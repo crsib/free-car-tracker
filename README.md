@@ -40,6 +40,18 @@ Install on a connected device:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Desktop / web viewer
+
+`viewer/` is a separate, read-only Go program that reads the same WebDAV folder the app syncs
+to and serves a browser UI: dashboard, trip map + OBD charts, ledger table, cross-trip analysis
+and raw GPX/CSV downloads. One self-contained binary, no dependencies.
+
+```bash
+cd viewer && go build -o fct-viewer . && ./fct-viewer
+```
+
+See [viewer/README.md](viewer/README.md).
+
 ## Project layout
 
 ```

@@ -29,3 +29,8 @@ keystore.properties
 /tools/*
 !/tools/carscanner_capture.py
 !/tools/li-profile-pids.md
+
+# viewer build output (the trailing-~ form is what the Go linker leaves behind
+# when the previous binary is still running and locked on Windows)
+viewer/fct-viewer*
+viewer/dist/
