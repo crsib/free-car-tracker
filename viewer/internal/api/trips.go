@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"crsib.me/fct-viewer/internal/domain"
 	"crsib.me/fct-viewer/internal/model"
 	"crsib.me/fct-viewer/internal/series"
 	"crsib.me/fct-viewer/internal/store"
@@ -59,6 +60,30 @@ func (s *Server) filterTrips(r *http.Request, cat *store.Catalog) []store.TripRe
 		out = append(out, t)
 	}
 	return out
+}
+
+// fuelEstimate combines the app's own aggregate, the cached OBD-derived signals, and the
+// car's tank capacity into one answer. It is computed here rather than baked into the summary
+// so that editing a car's tank capacity re-values every trip immediately.
+func (s *Server) fuelEstimate(t store.TripRecord, v model.Vehicle, sum *store.TripSummary) domain.FuelEstimate {
+	var sig domain.FuelSignals
+	if sum != nil {
+		sig = domain.FuelSignals{
+			LitresFromRate: sum.FuelLitresFromRate,
+			LitresFromMaf:  sum.FuelLitresFromMaf,
+			TankStartPct:   sum.TankStartPct,
+			TankEndPct:     sum.TankEndPct,
+			EngineRunSec:   sum.EngineRunSec,
+			EngineObserved: sum.EngineObserved,
+		}
+	}
+	return domain.EstimateFuel(
+		t.Trip.FuelUsedL,
+		t.Trip.DistanceKm,
+		sig,
+		v.TankCapacityL,
+		model.Powertrain(v.Powertrain).UsesFuel(),
+	)
 }
 
 // withSizes fills in side-file byte sizes from the trip's summary when the catalog record does
@@ -157,9 +182,10 @@ func (s *Server) handleTrip(w http.ResponseWriter, r *http.Request) {
 		"gpxSize":       t.GpxSize,
 		"remoteDir":     t.Dir,
 	}
-	if v, found := cat.FindVehicle(t.VehicleSyncID); found {
-		resp["units"] = unitsFor(v.Vehicle)
-		resp["vehicle"] = v.Vehicle
+	vehicle, haveVehicle := cat.FindVehicle(t.VehicleSyncID)
+	if haveVehicle {
+		resp["units"] = unitsFor(vehicle.Vehicle)
+		resp["vehicle"] = vehicle.Vehicle
 	}
 	// The metric list drives the chart's series picker, so it has to reflect what this trip
 	// actually recorded - offering EV_SOC on a trip whose adapter never answered it is worse
@@ -167,6 +193,9 @@ func (s *Server) handleTrip(w http.ResponseWriter, r *http.Request) {
 	if sum, err := s.index.Summarise(r.Context(), t); err == nil && sum != nil {
 		resp["stats"] = sum.Stats
 		resp["summary"] = sum
+		if haveVehicle {
+			resp["fuel"] = s.fuelEstimate(t, vehicle.Vehicle, sum)
+		}
 	} else if err != nil {
 		resp["seriesError"] = err.Error()
 	}
@@ -343,17 +372,24 @@ func tripFilename(t store.TripRecord, name string, raw bool) string {
 // analysisRow is one trip reduced to the numbers a comparison view plots against each other.
 // Everything here comes from the cached summary, so a query over 500 trips touches no network.
 type analysisRow struct {
-	TripSyncID     string   `json:"tripSyncId"`
-	VehicleSyncID  string   `json:"vehicleSyncId"`
-	VehicleName    string   `json:"vehicleName"`
-	StartedAt      int64    `json:"startedAtMillis"`
-	DurationSec    *int64   `json:"durationSec"`
-	DistanceKm     *float64 `json:"distanceKm"`
-	AvgSpeedKmh    *float64 `json:"avgSpeedKmh"`
-	MaxSpeedKmh    *float64 `json:"maxSpeedKmh"`
-	FuelUsedL      *float64 `json:"fuelUsedL"`
-	EnergyUsedKwh  *float64 `json:"energyUsedKwh"`
-	L100           *float64 `json:"avgConsumptionL100"`
+	TripSyncID    string   `json:"tripSyncId"`
+	VehicleSyncID string   `json:"vehicleSyncId"`
+	VehicleName   string   `json:"vehicleName"`
+	StartedAt     int64    `json:"startedAtMillis"`
+	DurationSec   *int64   `json:"durationSec"`
+	DistanceKm    *float64 `json:"distanceKm"`
+	AvgSpeedKmh   *float64 `json:"avgSpeedKmh"`
+	MaxSpeedKmh   *float64 `json:"maxSpeedKmh"`
+	FuelUsedL     *float64 `json:"fuelUsedL"`
+	EnergyUsedKwh *float64 `json:"energyUsedKwh"`
+	L100          *float64 `json:"avgConsumptionL100"`
+	// Estimated fuel, from whatever the car reported. Distinct from FuelUsedL/L100 above,
+	// which are only set when the app itself managed to integrate a fuel rate - true for a
+	// small minority of trips.
+	FuelLitres     *float64 `json:"fuelLitres"`
+	FuelL100       *float64 `json:"fuelL100"`
+	FuelMethod     string   `json:"fuelMethod,omitempty"`
+	FuelConfidence string   `json:"fuelConfidence,omitempty"`
 	Kwh100         *float64 `json:"kwhPer100Km"`
 	AmbientTempC   *float64 `json:"ambientTempC"`
 	ElevationGainM *float64 `json:"elevationGainM"`
@@ -370,6 +406,10 @@ type analysisRow struct {
 
 func (s *Server) analysisRows(r *http.Request, cat *store.Catalog) []analysisRow {
 	names := s.vehicleNames(cat)
+	vehicles := map[string]model.Vehicle{}
+	for _, v := range cat.Vehicles {
+		vehicles[v.SyncID] = v.Vehicle
+	}
 	trips := s.filterTrips(r, cat)
 	rows := make([]analysisRow, 0, len(trips))
 
@@ -385,6 +425,12 @@ func (s *Server) analysisRows(r *http.Request, cat *store.Catalog) []analysisRow
 		if t.Trip.EnergyUsedKwh != nil && t.Trip.DistanceKm != nil && *t.Trip.DistanceKm > 0 {
 			v := *t.Trip.EnergyUsedKwh / *t.Trip.DistanceKm * 100
 			row.Kwh100 = &v
+		}
+		if v, ok := vehicles[t.VehicleSyncID]; ok {
+			sum, _ := s.index.LoadSummary(t)
+			fuel := s.fuelEstimate(t, v, sum)
+			row.FuelLitres, row.FuelL100 = fuel.Litres, fuel.L100
+			row.FuelMethod, row.FuelConfidence = fuel.Method, fuel.Confidence
 		}
 		// Summaries are read from cache only: this endpoint must stay instant, and a trip
 		// that has not been prefetched simply reports the aggregates from its trip.json.
@@ -468,6 +514,7 @@ func (s *Server) handleAnalysisTripsCSV(w http.ResponseWriter, r *http.Request) 
 	header := []string{
 		"tripSyncId", "vehicle", "startedAt", "startedAtMillis", "durationSec", "distanceKm",
 		"gpsDistanceKm", "avgSpeedKmh", "maxSpeedKmh", "fuelUsedL", "avgConsumptionL100",
+		"fuelLitres", "fuelL100", "fuelMethod", "fuelConfidence",
 		"energyUsedKwh", "kwhPer100Km", "ambientTempC", "elevationGainM", "socStartPct",
 		"socEndPct", "socUsedPct", "dtcCount", "summarised",
 	}
@@ -480,7 +527,9 @@ func (s *Server) handleAnalysisTripsCSV(w http.ResponseWriter, r *http.Request) 
 			strconv.FormatInt(row.StartedAt, 10),
 			fmtInt64Ptr(row.DurationSec), fmtPtr(row.DistanceKm), fmtPtr(row.GpsDistanceKm),
 			fmtPtr(row.AvgSpeedKmh), fmtPtr(row.MaxSpeedKmh), fmtPtr(row.FuelUsedL),
-			fmtPtr(row.L100), fmtPtr(row.EnergyUsedKwh), fmtPtr(row.Kwh100),
+			fmtPtr(row.L100),
+			fmtPtr(row.FuelLitres), fmtPtr(row.FuelL100), row.FuelMethod, row.FuelConfidence,
+			fmtPtr(row.EnergyUsedKwh), fmtPtr(row.Kwh100),
 			fmtPtr(row.AmbientTempC), fmtPtr(row.ElevationGainM), fmtPtr(row.SocStartPct),
 			fmtPtr(row.SocEndPct), fmtPtr(row.SocUsedPct),
 			strconv.Itoa(row.DtcCount), strconv.FormatBool(row.Summarised),

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -480,5 +482,87 @@ func TestSideFilesExistIndependentlyOfKnownSize(t *testing.T) {
 	}
 	if sum.ObdSize == 0 || sum.GpxSize == 0 {
 		t.Errorf("summary should record the downloaded sizes, got obd=%d gpx=%d", sum.ObdSize, sum.GpxSize)
+	}
+}
+
+// A summary-schema bump must recompute from the local cache, not re-download. Against a
+// rate-limited host, forgetting the payloads on every schema change would turn adding one
+// derived field into minutes of pointless traffic.
+func TestSchemaBumpRecomputesWithoutRefetching(t *testing.T) {
+	start := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC).UnixMilli()
+	tree := &davTree{files: map[string]string{
+		carA + "/vehicle.json":                      vehicleJSON(carA, "Car"),
+		carA + "/trips/2026/01/trip-1/trip.json":    tripJSON("trip-1", carA, start),
+		carA + "/trips/2026/01/trip-1/obd.csv.gz":   gz(obdCSV),
+		carA + "/trips/2026/01/trip-1/track.gpx.gz": gz(trackGPX),
+	}}
+	ix := newTestIndex(t, tree)
+	cat := buildNow(t, ix)
+	trip := cat.Trips[0]
+
+	if _, err := ix.Summarise(context.Background(), trip); err != nil {
+		t.Fatal(err)
+	}
+	before := len(tree.gets)
+
+	// Simulate a schema bump: rewrite the stored summary under an older schema version while
+	// leaving its ContentKey (the source bytes) untouched.
+	path := ix.summaryPath(trip.VehicleSyncID, trip.TripSyncID)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored TripSummary
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatal(err)
+	}
+	stored.SourceKey = "v1|" + stored.ContentKey
+	if err := ix.storeSummary(&stored); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := ix.LoadSummary(trip); ok {
+		t.Fatal("the stale-schema summary should not have loaded")
+	}
+	if _, err := ix.Summarise(context.Background(), trip); err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.gets) != before {
+		t.Errorf("re-summarising after a schema bump issued %d GETs, want 0 - the payloads "+
+			"were already cached and unchanged", len(tree.gets)-before)
+	}
+}
+
+// A genuinely re-uploaded trip is the opposite case: its bytes really did change, so the
+// cached payloads must be dropped or the summary would be recomputed from stale files.
+func TestReuploadedTripDropsCachedPayloads(t *testing.T) {
+	start := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC).UnixMilli()
+	tree := &davTree{files: map[string]string{
+		carA + "/vehicle.json":                    vehicleJSON(carA, "Car"),
+		carA + "/trips/2026/01/trip-1/trip.json":  tripJSON("trip-1", carA, start),
+		carA + "/trips/2026/01/trip-1/obd.csv.gz": gz(obdCSV),
+	}}
+	ix := newTestIndex(t, tree)
+	cat := buildNow(t, ix)
+	trip := cat.Trips[0]
+
+	if _, err := ix.Summarise(context.Background(), trip); err != nil {
+		t.Fatal(err)
+	}
+	if !ix.cache.Has(trip.ObdPath()) {
+		t.Fatal("the OBD payload should be cached after summarising")
+	}
+
+	// The app re-uploaded this trip, so its upload clock moved.
+	trip.SyncedAtMillis += 1000
+	if _, err := ix.Summarise(context.Background(), trip); err != nil {
+		t.Fatal(err)
+	}
+	sum, ok := ix.LoadSummary(trip)
+	if !ok {
+		t.Fatal("a summary should exist for the re-uploaded trip")
+	}
+	if sum.ContentKey != contentKey(trip) {
+		t.Errorf("summary content key = %q, want it to track the new upload", sum.ContentKey)
 	}
 }

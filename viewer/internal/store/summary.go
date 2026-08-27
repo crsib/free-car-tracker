@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"crsib.me/fct-viewer/internal/domain"
 	"crsib.me/fct-viewer/internal/model"
 	"crsib.me/fct-viewer/internal/series"
 	"crsib.me/fct-viewer/internal/webdav"
@@ -22,10 +23,13 @@ import (
 // It is derived data, versioned by the trip's syncedAtMillis: re-upload a trip and the summary
 // is recomputed, but an unchanged trip is summarised exactly once, ever.
 type TripSummary struct {
-	TripSyncID    string    `json:"tripSyncId"`
-	VehicleSyncID string    `json:"vehicleSyncId"`
-	SourceKey     string    `json:"sourceKey"`
-	ComputedAt    time.Time `json:"computedAt"`
+	TripSyncID    string `json:"tripSyncId"`
+	VehicleSyncID string `json:"vehicleSyncId"`
+	SourceKey     string `json:"sourceKey"`
+	// ContentKey identifies the source bytes alone, so a schema bump can be told apart from a
+	// re-uploaded trip.
+	ContentKey string    `json:"contentKey,omitempty"`
+	ComputedAt time.Time `json:"computedAt"`
 
 	StartedAtMillis int64 `json:"startedAtMillis"`
 	EndedAtMillis   int64 `json:"endedAtMillis"`
@@ -37,6 +41,15 @@ type TripSummary struct {
 	// spends a PROPFIND per trip to discover them, so this is where the UI gets them from.
 	ObdSize int64 `json:"obdSize,omitempty"`
 	GpxSize int64 `json:"gpxSize,omitempty"`
+
+	// Raw fuel observations. Stored raw rather than as a finished estimate so that changing
+	// the car's tank capacity re-values every trip without re-downloading anything.
+	FuelLitresFromRate *float64 `json:"fuelLitresFromRate,omitempty"`
+	FuelLitresFromMaf  *float64 `json:"fuelLitresFromMaf,omitempty"`
+	TankStartPct       *float64 `json:"tankStartPct,omitempty"`
+	TankEndPct         *float64 `json:"tankEndPct,omitempty"`
+	EngineRunSec       float64  `json:"engineRunSec,omitempty"`
+	EngineObserved     bool     `json:"engineObserved,omitempty"`
 
 	// Headline values, pulled out because every analysis view wants them and digging them
 	// back out of Stats at query time would be both slow and repetitive.
@@ -71,8 +84,25 @@ func (ix *Index) summaryPath(vehicleSyncID, tripSyncID string) string {
 // longer lists each trip folder (that cost a request per trip against a throttling host). A
 // finished trip is immutable, so the only thing that can change its contents is a re-upload —
 // and that always moves syncedAtMillis.
+// The leading version is the *summary schema* version, not just the trip's. Bump it whenever a
+// new derived field is added, or every already-summarised trip would keep loading from a cache
+// that predates the field and silently report it as absent. Recomputing is cheap - the raw
+// payloads are already on disk, so it costs CPU and no network.
+//
+//	v2 -> v3: added the fuel signals (rate/MAF integrals, tank edges, engine run time).
+//	v3 -> v4: integrals need a minimum sample count; engine activity unions rpm and load.
+const summarySchemaVersion = "v4"
+
 func sourceKey(t TripRecord) string {
-	return fmt.Sprintf("v2|%s|%d", t.TripSyncID, t.SyncedAtMillis)
+	return summarySchemaVersion + "|" + contentKey(t)
+}
+
+// contentKey identifies the trip's *bytes*, with no schema version in it. A summary whose
+// contentKey still matches was computed from files that have not changed, so a schema bump can
+// recompute from the local cache instead of re-downloading every payload - which against a
+// rate-limited host would be minutes of pointless traffic.
+func contentKey(t TripRecord) string {
+	return fmt.Sprintf("%s|%d", t.TripSyncID, t.SyncedAtMillis)
 }
 
 // LoadSummary returns a cached summary if it matches the trip's current source files.
@@ -184,18 +214,23 @@ func (ix *Index) Summarise(ctx context.Context, t TripRecord) (*TripSummary, err
 	if s, ok := ix.LoadSummary(t); ok {
 		return s, nil
 	}
-	// Getting here with a summary on disk means the trip was re-uploaded (its syncedAtMillis
-	// moved). Cached side files are keyed by path with no ETag, so they would otherwise be
-	// served forever; drop them explicitly at the one moment we know they are stale.
-	if _, stale := ix.loadSummaryIgnoringVersion(t); stale {
+	// Getting here with a summary on disk means either the trip was re-uploaded or the summary
+	// schema moved on. Only the former makes the cached side files stale: they are keyed by
+	// path with no ETag, so drop them at the one moment we know they changed. A schema bump
+	// must NOT drop them, or every trip would be re-downloaded to compute a new derived field.
+	if prev, existed := ix.loadSummaryIgnoringVersion(t); existed &&
+		prev.ContentKey != "" && prev.ContentKey != contentKey(t) {
 		ix.cache.Forget(t.ObdPath())
 		ix.cache.Forget(t.GpxPath())
 	}
+
+	fuelType := ix.fuelTypeFor(t.VehicleSyncID)
 
 	s := &TripSummary{
 		TripSyncID:      t.TripSyncID,
 		VehicleSyncID:   t.VehicleSyncID,
 		SourceKey:       sourceKey(t),
+		ContentKey:      contentKey(t),
 		ComputedAt:      time.Now(),
 		StartedAtMillis: t.Trip.StartedAtMillis,
 	}
@@ -209,6 +244,9 @@ func (ix *Index) Summarise(ctx context.Context, t TripRecord) (*TripSummary, err
 	}
 	if frame != nil {
 		s.Stats = frame.Stats()
+		s.FuelLitresFromRate, s.FuelLitresFromMaf, s.TankStartPct, s.TankEndPct,
+			s.EngineRunSec, s.EngineObserved = frame.FuelSignals(
+			domain.AirFuelRatio(fuelType), domain.FuelDensity(fuelType))
 		byName := map[string]series.Stat{}
 		for _, st := range s.Stats {
 			byName[st.Name] = st
@@ -266,6 +304,19 @@ func (ix *Index) Summarise(ctx context.Context, t TripRecord) (*TripSummary, err
 		return s, nil // usable even if it could not be cached
 	}
 	return s, nil
+}
+
+// fuelTypeFor looks up a car's fuel type so the MAF derivation uses the right chemistry.
+// Unknown falls back to petrol, which is what the app's DerivedMetrics assumes.
+func (ix *Index) fuelTypeFor(vehicleSyncID string) string {
+	cat := ix.Catalog()
+	if cat == nil {
+		return ""
+	}
+	if v, ok := cat.FindVehicle(vehicleSyncID); ok && v.Vehicle.FuelType != nil {
+		return *v.Vehicle.FuelType
+	}
+	return ""
 }
 
 // Prefetch downloads and summarises every trip in scope, so the analysis views have complete

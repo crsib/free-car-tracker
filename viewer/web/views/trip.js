@@ -30,6 +30,7 @@ export async function renderTrip(view, tripId) {
   const files = detail.files || {};
   const hasGpx = !!files.gpxGz;
   const hasObd = !!files.obdCsvGz;
+  const fuel = detail.fuel || { method: '' };
 
   // --- pick the initial metrics ---
   const available = stats.map((s) => s.name);
@@ -73,8 +74,12 @@ export async function renderTrip(view, tripId) {
       fmt.isNum(trip.movingSec) ? `${fmt.duration(trip.movingSec)} moving` : null),
     stat('Avg speed', fmt.speed(trip.avgSpeedKmh, units)),
     stat('Max speed', fmt.speed(trip.maxSpeedKmh, units)),
-    fmt.isNum(trip.fuelUsedL) ? stat('Fuel used', fmt.volume(trip.fuelUsedL, units)) : null,
-    fmt.isNum(trip.avgConsumptionL100) ? stat('Consumption', fmt.fuelEconomy(trip.avgConsumptionL100, units)) : null,
+    // Fuel comes from the estimator, not straight off the trip record: the app only fills
+    // fuelUsedL when the engine reports a fuel rate, which most cars never do.
+    fuel.litres !== null && fuel.litres !== undefined
+      ? stat('Fuel used', fmt.volume(fuel.litres, units), fuelMethodCaption(fuel)) : null,
+    fmt.isNum(fuel.l100)
+      ? stat('Consumption', fmt.fuelEconomy(fuel.l100, units), fuelMethodCaption(fuel)) : null,
     fmt.isNum(trip.energyUsedKwh) ? stat('Energy used', fmt.energy(trip.energyUsedKwh)) : null,
     fmt.isNum(trip.energyUsedKwh) && fmt.isNum(trip.distanceKm) && trip.distanceKm > 0
       ? stat('Electric economy', fmt.electricEconomy((trip.energyUsedKwh / trip.distanceKm) * 100, units)) : null,
@@ -120,6 +125,28 @@ export async function renderTrip(view, tripId) {
       'Drag to zoom, scroll to zoom around the cursor, double-click to reset. Zooming re-reads '
       + 'that window at full resolution.'));
 
+  // --- fuel ---
+  // Only for cars that burn fuel, and only when there was something to say. For a hybrid this
+  // is often the most interesting panel on the page: it answers "did the range extender
+  // actually run, and what did it drink".
+  const fuelCard = fuel.method
+    ? card('Fuel',
+      el('div', { class: 'stat-grid compact' },
+        stat('Fuel used',
+          fuel.litres === null || fuel.litres === undefined ? '—' : fmt.volume(fuel.litres, units)),
+        stat('Consumption', fmt.isNum(fuel.l100) ? fmt.fuelEconomy(fuel.l100, units) : '—'),
+        stat('Engine running', fuel.engineRunSec ? fmt.duration(fuel.engineRunSec) : 'never',
+          fmt.isNum(trip.durationSec) && trip.durationSec > 0 && fuel.engineRunSec
+            ? `${Math.round((fuel.engineRunSec / trip.durationSec) * 100)}% of the trip` : null),
+        fmt.isNum(fuel.tankStartPct) && fmt.isNum(fuel.tankEndPct)
+          && (fuel.method === 'tankLevel' || fuel.method === 'engineOff')
+          ? stat('Tank gauge', `${fmt.num(fuel.tankStartPct, 1)}% → ${fmt.num(fuel.tankEndPct, 1)}%`,
+            `${fmt.num(fuel.tankStartPct - fuel.tankEndPct, 1)} point change`)
+          : null),
+      el('p', { class: `muted small${fuel.confidence === 'rough' ? ' caveat' : ''}` },
+        el('strong', {}, `${methodName(fuel.method)}.`), fuel.note ? ` ${fuel.note}` : ''))
+    : null;
+
   // --- DTCs ---
   const dtcCard = (detail.dtcs || []).length
     ? card('Diagnostic trouble codes',
@@ -153,6 +180,7 @@ export async function renderTrip(view, tripId) {
     statRow,
     detail.seriesError ? el('div', { class: 'error-inline' }, `Telemetry unavailable: ${detail.seriesError}`) : null,
     el('div', { class: 'grid-map' }, mapCard, chartCard),
+    fuelCard,
     dtcCard,
     statsCard));
 
@@ -242,6 +270,28 @@ export async function renderTrip(view, tripId) {
       routeMap.destroy();
     },
   };
+}
+
+const FUEL_METHODS = {
+  trip: 'From the engine’s fuel-rate reading',
+  fuelRate: 'From the engine’s fuel-rate reading',
+  maf: 'Derived from mass air flow',
+  tankLevel: 'Estimated from the tank gauge',
+  engineOff: 'Engine never ran',
+};
+
+function methodName(method) {
+  return FUEL_METHODS[method] || 'Fuel';
+}
+
+/** The short caption under a stat tile, e.g. "tank gauge · rough". */
+function fuelMethodCaption(fuel) {
+  const short = {
+    trip: 'fuel rate', fuelRate: 'fuel rate', maf: 'mass air flow',
+    tankLevel: 'tank gauge', engineOff: 'engine off',
+  }[fuel.method];
+  if (!short) return null;
+  return fuel.confidence && fuel.confidence !== 'measured' ? `${short} · ${fuel.confidence}` : short;
 }
 
 /** " (28 KB)" once the size is known, and nothing at all before that. */

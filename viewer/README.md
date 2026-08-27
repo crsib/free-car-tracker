@@ -176,6 +176,39 @@ view says so rather than quietly leaving it out.
 The catalog is persisted, so restarting shows your data before any network call — and a viewer
 started offline still browses everything already cached.
 
+## Fuel usage and economy
+
+The app only fills a trip's `fuelUsedL` by integrating `fuelRateLph` (PID 0x5E), and most cars
+never answer that PID — on a real 157-trip folder it was set on **two**. So the viewer estimates
+it from whatever the ECU did report, and says which method it used:
+
+| Method | Confidence | Source |
+| --- | --- | --- |
+| engine off | measured | rpm and engine load both flat at zero — nothing was burned |
+| fuel rate | measured | the app's own aggregate, or our integration of `fuelRateLph` |
+| mass air flow | estimated | `mafGramsPerSec` / AFR / density, assuming stoichiometric |
+| tank gauge | rough | `fuelLevelPct` drop × the car's tank capacity |
+
+Every figure is plausibility-checked and falls through to the next method on failure, because
+the sources lie in specific ways:
+
+- **A stationary engine outranks everything.** On a range-extender most trips run on battery,
+  and the gauge still wanders — one 6 km trip's gauge "dropped" 14.5 points, implying 8.7 L,
+  while rpm sat at zero for all 303 samples. That trip reports 0 L.
+- **Absurd totals are rejected rather than propagated.** A single spurious fuel-rate sample
+  integrates into nonsense; two real trips carried an app-computed 597,423,361,848,841 L. A
+  figure above two tankfuls is treated as a broken reading.
+- **An integral needs enough samples to be a trip total.** A two-sample MAF blip once beat a
+  demonstrably stationary engine.
+- **The gauge needs distance to mean anything.** Below 15 km its quantisation dwarfs the
+  reading, so no estimate is offered. A gauge that *rose* (a refuel, or slosh) is rejected, and
+  one that started brim-full is flagged as reading low, since it stays pinned after a fill.
+
+Signals are extracted once at summarise time and stored raw, so changing a car's tank capacity
+re-values every trip without re-downloading anything. `fuelLitres` / `fuelL100` / `fuelMethod`
+are in the analysis rows and the CSV, so estimated economy can be plotted against temperature or
+anything else.
+
 ## Matching the app's numbers
 
 A viewer that disagreed with the phone would be worse than useless, so the economy maths is a

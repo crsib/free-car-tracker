@@ -18,6 +18,8 @@ const BASE_AXES = [
   { key: 'avgSpeedKmh', label: 'Average speed (km/h)' },
   { key: 'maxSpeedKmh', label: 'Max speed (km/h)' },
   { key: 'avgConsumptionL100', label: 'Consumption (L/100km)' },
+  { key: 'fuelL100', label: 'Fuel economy, estimated (L/100km)' },
+  { key: 'fuelLitres', label: 'Fuel used, estimated (L)' },
   { key: 'kwhPer100Km', label: 'Electric economy (kWh/100km)' },
   { key: 'fuelUsedL', label: 'Fuel used (L)' },
   { key: 'energyUsedKwh', label: 'Energy used (kWh)' },

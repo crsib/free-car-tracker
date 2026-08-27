@@ -5,6 +5,12 @@
 gradlew text eol=lf
 *.sh text eol=lf
 
+# Go tooling expects LF. Without this, a Windows checkout gets CRLF and `gofmt -l`
+# reports every single file as unformatted, which buries real formatting problems.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
 # Windows scripts stay CRLF.
 *.bat text eol=crlf
 
