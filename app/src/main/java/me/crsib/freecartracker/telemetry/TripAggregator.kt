@@ -22,11 +22,42 @@ object TripAggregator {
      */
     private const val MAX_PLAUSIBLE_ODOMETER_DELTA_KM = 5_000.0
 
+    /**
+     * Physical bounds on a single OBD reading. An ELM327 that drops or mis-frames a byte can
+     * return a value orders of magnitude out, and integrating even one of those corrupts the
+     * whole trip: two real trips ended up recorded as having burned 5.97e14 litres this way, and
+     * the figure then propagated into the dashboard and the sync export. A reading outside these
+     * bounds is a broken reading rather than an extreme one, so it is dropped and the rest of the
+     * trip still aggregates normally.
+     */
+    private const val MAX_PLAUSIBLE_FUEL_RATE_LPH = 150.0
+    private const val MAX_PLAUSIBLE_BATTERY_POWER_KW = 1_000.0
+    private const val MAX_PLAUSIBLE_SPEED_KMH = 400.0
+
+    /**
+     * Upper bound on a whole trip's fuel use (litres), behind the per-sample filter. Nothing on
+     * the road burns this much in one trip, so a total above it means something upstream is wrong
+     * and reporting nothing beats reporting a fiction — the same call [odometerDistanceKm] makes.
+     */
+    private const val MAX_PLAUSIBLE_TRIP_FUEL_L = 300.0
+
     /** GPS fixes worse than this (metres) are too coarse to trust for distance and are dropped. */
     private const val GPS_MAX_ACCURACY_M = 50.0
 
     /** A hop shorter than this (metres) is below the GPS noise floor even for an accurate fix. */
     private const val GPS_MIN_STEP_M = 8.0
+
+    /** A fuel rate the engine could actually be delivering, or null for a broken reading. */
+    private fun plausibleFuelRate(v: Double?): Double? =
+        v?.takeIf { it.isFinite() && it >= 0.0 && it <= MAX_PLAUSIBLE_FUEL_RATE_LPH }
+
+    /** Signed HV battery power within what a traction pack can physically move. */
+    private fun plausibleBatteryPower(v: Double?): Double? =
+        v?.takeIf { it.isFinite() && kotlin.math.abs(it) <= MAX_PLAUSIBLE_BATTERY_POWER_KW }
+
+    /** A road speed, or null for a misframed reading. */
+    private fun plausibleSpeed(v: Double?): Double? =
+        v?.takeIf { it.isFinite() && it >= 0.0 && it <= MAX_PLAUSIBLE_SPEED_KMH }
 
     fun aggregate(
         startedAtMillis: Long,
@@ -44,8 +75,9 @@ object TripAggregator {
             ?: obdDistanceKm(obd)
 
         val speeds = when {
-            gps.count { it.speedKmh != null } >= 2 -> gps.mapNotNull { it.speedKmh }
-            else -> obd.mapNotNull { it.speedKmh }
+            gps.count { plausibleSpeed(it.speedKmh) != null } >= 2 ->
+                gps.mapNotNull { plausibleSpeed(it.speedKmh) }
+            else -> obd.mapNotNull { plausibleSpeed(it.speedKmh) }
         }
         val avgSpeed = speeds.takeIf { it.isNotEmpty() }?.average()
         val maxSpeed = speeds.maxOrNull()
@@ -114,13 +146,13 @@ object TripAggregator {
 
     /** Integrate OBD speed (km/h) over sample time gaps as a distance fallback. */
     private fun obdDistanceKm(obd: List<ObdSample>): Double? {
-        val withSpeed = obd.filter { it.speedKmh != null }
+        val withSpeed = obd.mapNotNull { s -> plausibleSpeed(s.speedKmh)?.let { s.timestampMillis to it } }
         if (withSpeed.size < 2) return null
         var km = 0.0
         for (i in 1 until withSpeed.size) {
-            val dtHours = (withSpeed[i].timestampMillis - withSpeed[i - 1].timestampMillis) / 3_600_000.0
+            val dtHours = (withSpeed[i].first - withSpeed[i - 1].first) / 3_600_000.0
             if (dtHours <= 0) continue
-            val avg = (withSpeed[i].speedKmh!! + withSpeed[i - 1].speedKmh!!) / 2.0
+            val avg = (withSpeed[i].second + withSpeed[i - 1].second) / 2.0
             km += avg * dtHours
         }
         return km
@@ -128,10 +160,10 @@ object TripAggregator {
 
     private fun movingSeconds(gps: List<GpsPoint>, obd: List<ObdSample>): Long? {
         val series: List<Pair<Long, Double>> = when {
-            gps.count { it.speedKmh != null } >= 2 ->
-                gps.mapNotNull { p -> p.speedKmh?.let { p.timestampMillis to it } }
-            obd.count { it.speedKmh != null } >= 2 ->
-                obd.mapNotNull { s -> s.speedKmh?.let { s.timestampMillis to it } }
+            gps.count { plausibleSpeed(it.speedKmh) != null } >= 2 ->
+                gps.mapNotNull { p -> plausibleSpeed(p.speedKmh)?.let { p.timestampMillis to it } }
+            obd.count { plausibleSpeed(it.speedKmh) != null } >= 2 ->
+                obd.mapNotNull { s -> plausibleSpeed(s.speedKmh)?.let { s.timestampMillis to it } }
             else -> return null
         }
         var movingMs = 0L
@@ -150,29 +182,32 @@ object TripAggregator {
      * when there aren't enough power samples (e.g. an ICE car, or before 0x9A is read).
      */
     private fun batteryEnergyKwh(obd: List<ObdSample>): Double? {
-        val withPower = obd.filter { it.hvBatteryPowerKw != null }
+        val withPower = obd.mapNotNull { s -> plausibleBatteryPower(s.hvBatteryPowerKw)?.let { s.timestampMillis to it } }
         if (withPower.size < 2) return null
         var kwh = 0.0
         for (i in 1 until withPower.size) {
-            val dtHours = (withPower[i].timestampMillis - withPower[i - 1].timestampMillis) / 3_600_000.0
+            val dtHours = (withPower[i].first - withPower[i - 1].first) / 3_600_000.0
             if (dtHours <= 0) continue
-            val avgKw = (withPower[i].hvBatteryPowerKw!! + withPower[i - 1].hvBatteryPowerKw!!) / 2.0
+            val avgKw = (withPower[i].second + withPower[i - 1].second) / 2.0
             kwh += avgKw * dtHours
         }
-        return kwh
+        return kwh.takeIf { it.isFinite() }
     }
 
-    /** Integrate fuel rate (L/h) over time, in litres. Null if no fuel-rate samples. */
+    /**
+     * Integrate fuel rate (L/h) over time, in litres. Null if no usable fuel-rate samples, or if
+     * the total comes out implausible — see [MAX_PLAUSIBLE_FUEL_RATE_LPH].
+     */
     private fun fuelUsedLitres(obd: List<ObdSample>): Double? {
-        val withRate = obd.filter { it.fuelRateLph != null }
+        val withRate = obd.mapNotNull { s -> plausibleFuelRate(s.fuelRateLph)?.let { s.timestampMillis to it } }
         if (withRate.size < 2) return null
         var litres = 0.0
         for (i in 1 until withRate.size) {
-            val dtHours = (withRate[i].timestampMillis - withRate[i - 1].timestampMillis) / 3_600_000.0
+            val dtHours = (withRate[i].first - withRate[i - 1].first) / 3_600_000.0
             if (dtHours <= 0) continue
-            val avgRate = (withRate[i].fuelRateLph!! + withRate[i - 1].fuelRateLph!!) / 2.0
+            val avgRate = (withRate[i].second + withRate[i - 1].second) / 2.0
             litres += avgRate * dtHours
         }
-        return litres
+        return litres.takeIf { it.isFinite() && it <= MAX_PLAUSIBLE_TRIP_FUEL_L }
     }
 }

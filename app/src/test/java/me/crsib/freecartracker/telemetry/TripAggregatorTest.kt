@@ -16,10 +16,16 @@ class TripAggregatorTest {
             altitudeM = null, speedKmh = speedKmh, bearingDeg = null, accuracyM = accuracyM, provider = "gps",
         )
 
-    private fun obd(tsSec: Long, speedKmh: Double?, fuelRateLph: Double? = null, odometerKm: Double? = null) =
+    private fun obd(
+        tsSec: Long,
+        speedKmh: Double?,
+        fuelRateLph: Double? = null,
+        odometerKm: Double? = null,
+        hvBatteryPowerKw: Double? = null,
+    ) =
         ObdSample(
             tripId = 1, timestampMillis = tsSec * 1000, speedKmh = speedKmh,
-            fuelRateLph = fuelRateLph, odometerKm = odometerKm,
+            fuelRateLph = fuelRateLph, odometerKm = odometerKm, hvBatteryPowerKw = hvBatteryPowerKw,
         )
 
     @Test
@@ -178,5 +184,80 @@ class TripAggregatorTest {
         assertNull(agg.avgSpeedKmh)
         assertEquals(5L, agg.durationSec)
         assertTrue(agg.obdSampleCount == 0 && agg.gpsPointCount == 0)
+    }
+
+    @Test
+    fun fuelRate_singleGarbageSampleIsDroppedNotIntegrated() {
+        // An ELM327 that mis-frames one response can return a value orders of magnitude out.
+        // Integrating it produced a recorded 5.97e14 litres on two real trips. The bad sample is
+        // dropped and the surrounding, sane ones still give the right answer: 6 L/h for 3600 s.
+        val obd = listOf(
+            obd(0, 60.0, fuelRateLph = 6.0),
+            obd(1800, 60.0, fuelRateLph = 3.2e15),
+            obd(3600, 60.0, fuelRateLph = 6.0),
+        )
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(6.0, agg.fuelUsedL!!, 1e-6)
+    }
+
+    @Test
+    fun fuelRate_implausibleTotalReportsNothing() {
+        // Every sample individually passes the per-sample bound, but sustained maximum flow for
+        // days cannot have happened. Reporting nothing beats reporting a fiction.
+        val obd = (0..20).map { obd(it * 36_000L, 60.0, fuelRateLph = 140.0) }
+        val agg = TripAggregator.aggregate(0, 720_000_000, emptyList(), obd)
+        assertNull("an impossible total should be discarded", agg.fuelUsedL)
+        assertNull("and so should the economy derived from it", agg.avgConsumptionL100)
+    }
+
+    @Test
+    fun fuelRate_nonFiniteSamplesAreIgnored() {
+        val obd = listOf(
+            obd(0, 60.0, fuelRateLph = 6.0),
+            obd(1800, 60.0, fuelRateLph = Double.NaN),
+            obd(2700, 60.0, fuelRateLph = Double.POSITIVE_INFINITY),
+            obd(3600, 60.0, fuelRateLph = 6.0),
+        )
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(6.0, agg.fuelUsedL!!, 1e-6)
+    }
+
+    @Test
+    fun speed_garbageSampleDoesNotBecomeTheTripMaximum() {
+        // maxSpeedKmh is shown straight on the trip screen, so one misframed reading would be
+        // permanently visible as a 9000 km/h top speed.
+        val obd = listOf(
+            obd(0, 40.0),
+            obd(10, 9_000.0),
+            obd(20, 60.0),
+        )
+        val agg = TripAggregator.aggregate(0, 20_000, emptyList(), obd)
+        assertEquals(60.0, agg.maxSpeedKmh!!, 1e-6)
+    }
+
+    @Test
+    fun batteryPower_garbageSampleIsDroppedFromTheEnergyIntegral() {
+        // 10 kW for 3600 s is 10 kWh; the spike in the middle must not reach the total.
+        val obd = listOf(
+            obd(0, 60.0, hvBatteryPowerKw = 10.0),
+            obd(1800, 60.0, hvBatteryPowerKw = 5.0e9),
+            obd(3600, 60.0, hvBatteryPowerKw = 10.0),
+        )
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(10.0, agg.energyUsedKwh!!, 1e-6)
+    }
+
+    @Test
+    fun guards_leaveLegitimateExtremesAlone() {
+        // The bounds must not clip real driving: a thirsty engine at 90 L/h, an autobahn run at
+        // 250 km/h, and hard regen at -120 kW are all plausible and must survive.
+        val obd = listOf(
+            obd(0, 250.0, fuelRateLph = 90.0, hvBatteryPowerKw = -120.0),
+            obd(3600, 250.0, fuelRateLph = 90.0, hvBatteryPowerKw = -120.0),
+        )
+        val agg = TripAggregator.aggregate(0, 3_600_000, emptyList(), obd)
+        assertEquals(90.0, agg.fuelUsedL!!, 1e-6)
+        assertEquals(250.0, agg.maxSpeedKmh!!, 1e-6)
+        assertEquals(-120.0, agg.energyUsedKwh!!, 1e-6)
     }
 }
