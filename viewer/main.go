@@ -69,6 +69,7 @@ func main() {
 		conc      = flag.Int("webdav-concurrency", 0, "WebDAV requests in flight at once (default 2)")
 		open      = flag.Bool("open", true, "open a browser window on start (loopback listeners only)")
 		refresh   = flag.Bool("refresh", true, "refresh the index from the server on start")
+		autoEvery = flag.Int("auto-refresh", -1, "minutes between automatic re-indexes; 0 turns them off (default 15)")
 		showVer   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
@@ -109,6 +110,9 @@ func main() {
 	if *conc > 0 {
 		cfg.Concurrency = *conc
 	}
+	if *autoEvery >= 0 {
+		cfg.SetAutoRefreshMinutes(*autoEvery)
+	}
 
 	maxBytes, err := parseSize(*cacheMax)
 	if err != nil {
@@ -132,6 +136,14 @@ func main() {
 		log.Printf("could not read the saved index: %v", err)
 	}
 
+	// Automatic updates run on the server rather than in the page: the browser tab is only
+	// the trigger, so a second tab does not mean a second walk, and a refresh started before
+	// you navigated away still finishes.
+	sched := store.NewScheduler(index, time.Duration(cfg.EffectiveAutoRefreshMinutes())*time.Minute)
+	schedCtx, stopSched := context.WithCancel(context.Background())
+	defer stopSched()
+	go sched.Run(schedCtx)
+
 	authUser, authPass := splitAuth(*auth)
 	allow, err := api.ParseAllowList(*allowFrom)
 	if err != nil {
@@ -146,7 +158,7 @@ func main() {
 	}
 
 	srv := api.NewServer(api.Options{
-		Config: cfg, ConfigPath: *cfgPath, Index: index, Cache: cache,
+		Config: cfg, ConfigPath: *cfgPath, Index: index, Cache: cache, Scheduler: sched,
 		AuthUser: authUser, AuthPass: authPass, Allow: allow, Version: versionString(),
 	})
 
@@ -188,6 +200,11 @@ func main() {
 	}
 	log.Printf("webdav pacing: %.3g req/s, %d retries on 429, %d in flight",
 		cfg.EffectiveRPS(), cfg.EffectiveRetries(), cfg.EffectiveConcurrency())
+	if n := cfg.EffectiveAutoRefreshMinutes(); n > 0 {
+		log.Printf("auto-refresh: every %d min while the UI is open", n)
+	} else {
+		log.Printf("auto-refresh: off (refresh from the UI or set -auto-refresh)")
+	}
 
 	if *open && isLoopback(*addr) {
 		go openBrowser(shown)
@@ -206,6 +223,7 @@ func main() {
 		}
 	case <-sig:
 		log.Println("shutting down")
+		stopSched()
 		index.Cancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

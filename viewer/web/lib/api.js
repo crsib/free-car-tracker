@@ -31,7 +31,11 @@ export const api = {
   status: () => request('/api/status'),
   test: (cfg) => request('/api/test', { method: 'POST', body: JSON.stringify(cfg) }),
   setup: (cfg) => request('/api/setup', { method: 'POST', body: JSON.stringify(cfg) }),
-  refresh: () => request('/api/refresh', { method: 'POST' }),
+  /** full=true re-downloads every manifest instead of trusting the cached copies. */
+  refresh: (full) => request(`/api/refresh${qs({ full: full ? 1 : null })}`, { method: 'POST' }),
+  setAutoRefresh: (minutes) => request('/api/auto-refresh', {
+    method: 'POST', body: JSON.stringify({ minutes }),
+  }),
   prefetch: (vehicle) => request(`/api/prefetch${qs({ vehicle })}`, { method: 'POST' }),
   cancel: () => request('/api/cancel', { method: 'POST' }),
   clearCache: () => request('/api/cache/clear', { method: 'POST' }),

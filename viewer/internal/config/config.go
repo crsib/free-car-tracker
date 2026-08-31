@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -33,6 +34,12 @@ type Config struct {
 	MaxRetries int `json:"maxRetries,omitempty"`
 	// Concurrency is how many WebDAV requests may be in flight at once.
 	Concurrency int `json:"concurrency,omitempty"`
+
+	// AutoRefreshMinutes is how often the viewer re-reads the WebDAV folder by itself.
+	// It is a pointer because zero is a meaningful value here - it means "never, only when
+	// I press Refresh" - and has to be distinguishable from a config written before this
+	// setting existed, which should get the default.
+	AutoRefreshMinutes *int `json:"autoRefreshMinutes,omitempty"`
 }
 
 // Conservative defaults, chosen for a hosted provider rather than a home server: it is far
@@ -41,6 +48,13 @@ const (
 	DefaultRequestsPerSecond = 3.0
 	DefaultMaxRetries        = 5
 	DefaultConcurrency       = 2
+	// DefaultAutoRefreshMinutes picks up new drives without anyone pressing anything. It is
+	// cheap: an incremental walk only re-lists directories, and trip payloads already on
+	// disk are not downloaded again.
+	DefaultAutoRefreshMinutes = 15
+	// MinAutoRefreshMinutes floors the interval. Anything faster is a directory walk that
+	// has not finished before the next one starts, against a host that throttles.
+	MinAutoRefreshMinutes = 1
 )
 
 func (c Config) EffectiveRPS() float64 {
@@ -62,6 +76,30 @@ func (c Config) EffectiveConcurrency() int {
 		return c.Concurrency
 	}
 	return DefaultConcurrency
+}
+
+// EffectiveAutoRefreshMinutes returns the automatic re-index interval in minutes, 0 when
+// automatic updates are off.
+func (c Config) EffectiveAutoRefreshMinutes() int {
+	if c.AutoRefreshMinutes == nil {
+		return DefaultAutoRefreshMinutes
+	}
+	n := *c.AutoRefreshMinutes
+	if n <= 0 {
+		return 0
+	}
+	if n < MinAutoRefreshMinutes {
+		return MinAutoRefreshMinutes
+	}
+	return n
+}
+
+// SetAutoRefreshMinutes records an explicit interval, including 0 for "off".
+func (c *Config) SetAutoRefreshMinutes(n int) {
+	if n < 0 {
+		n = 0
+	}
+	c.AutoRefreshMinutes = &n
 }
 
 func (c Config) Configured() bool {
@@ -150,6 +188,11 @@ func ApplyEnv(c Config) Config {
 	if os.Getenv("FCT_WEBDAV_INSECURE") == "1" {
 		c.Insecure = true
 	}
+	if v := os.Getenv("FCT_AUTO_REFRESH_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			c.SetAutoRefreshMinutes(n)
+		}
+	}
 	return c
 }
 
@@ -174,5 +217,8 @@ func (c Config) Redacted() map[string]any {
 		"rps":         c.EffectiveRPS(),
 		"maxRetries":  c.EffectiveRetries(),
 		"concurrency": c.EffectiveConcurrency(),
+		// Minutes, 0 meaning "only when asked". The UI shows this as a picker rather than a
+		// free number, so it is fine to hand it over as-is.
+		"autoRefreshMinutes": c.EffectiveAutoRefreshMinutes(),
 	}
 }

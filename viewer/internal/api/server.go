@@ -26,6 +26,9 @@ type Server struct {
 
 	index *store.Index
 	cache *store.Cache
+	// sched re-indexes on a timer. It is optional: a nil scheduler simply means the viewer
+	// only updates when asked.
+	sched *store.Scheduler
 
 	// auth, when set, gates every request behind HTTP Basic. It exists for the case where
 	// the viewer is bound to something other than localhost: the WebDAV credentials live in
@@ -47,6 +50,7 @@ type Options struct {
 	ConfigPath string
 	Index      *store.Index
 	Cache      *store.Cache
+	Scheduler  *store.Scheduler
 	AuthUser   string
 	AuthPass   string
 	Allow      *AllowList
@@ -56,7 +60,7 @@ type Options struct {
 func NewServer(o Options) *Server {
 	return &Server{
 		cfg: o.Config, cfgPath: o.ConfigPath,
-		index: o.Index, cache: o.Cache,
+		index: o.Index, cache: o.Cache, sched: o.Scheduler,
 		authUser: o.AuthUser, authPass: o.AuthPass, allow: o.Allow,
 		startedAt: time.Now(), version: o.Version,
 	}
@@ -79,6 +83,7 @@ func (s *Server) Routes(ui http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/prefetch", s.handlePrefetch)
 	mux.HandleFunc("POST /api/cancel", s.handleCancel)
 	mux.HandleFunc("POST /api/cache/clear", s.handleCacheClear)
+	mux.HandleFunc("POST /api/auto-refresh", s.handleAutoRefresh)
 
 	mux.HandleFunc("GET /api/vehicles", s.handleVehicles)
 	mux.HandleFunc("GET /api/vehicles/{vehicle}/dashboard", s.handleDashboard)
@@ -98,7 +103,7 @@ func (s *Server) Routes(ui http.Handler) http.Handler {
 	mux.Handle("/", ui)
 	// Peer-IP filtering runs outermost: a caller that is not allowed should never reach
 	// the auth prompt, the logger, or any handler.
-	return s.withAllowList(s.withAuth(s.withLogging(mux)))
+	return s.withAllowList(s.withAuth(s.withLogging(s.withActivity(mux))))
 }
 
 func (s *Server) withAuth(next http.Handler) http.Handler {
@@ -113,6 +118,21 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			w.Header().Set("WWW-Authenticate", `Basic realm="car tracker viewer"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withActivity tells the scheduler that a client is alive. The UI polls /api/status on a
+// timer, so this is how the process knows whether anyone is looking - and therefore whether
+// updating in the background is work for someone or just traffic.
+func (s *Server) withActivity(next http.Handler) http.Handler {
+	if s.sched == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			s.sched.MarkActive(time.Now())
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -236,6 +256,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		status["vehicleCount"] = 0
 		status["tripCount"] = 0
 	}
+	if s.sched != nil {
+		status["autoRefresh"] = s.sched.State(time.Now())
+	}
 	if size, files, err := s.cache.Size(); err == nil {
 		status["cacheBytes"] = size
 		status["cacheFiles"] = files
@@ -341,8 +364,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "webdav is not configured")
 		return
 	}
-	started := s.index.Refresh()
-	writeJSON(w, map[string]any{"started": started, "progress": s.index.Progress()})
+	// full=1 re-downloads every manifest instead of trusting the cached copies. It is the
+	// button for "the numbers look wrong", not the everyday one.
+	full := r.URL.Query().Get("full") == "1"
+	started := false
+	if full {
+		started = s.index.RefreshFull()
+	} else {
+		started = s.index.Refresh()
+	}
+	writeJSON(w, map[string]any{"started": started, "full": full, "progress": s.index.Progress()})
 }
 
 func (s *Server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
@@ -352,6 +383,44 @@ func (s *Server) handlePrefetch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	s.index.Cancel()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+type autoRefreshRequest struct {
+	// Minutes is the new interval; 0 turns automatic updates off.
+	Minutes int `json:"minutes"`
+}
+
+// handleAutoRefresh changes the automatic update interval and persists it. It is separate
+// from /api/setup because that one re-verifies the WebDAV credentials, and flipping a timer
+// should not depend on the server being reachable at that moment.
+func (s *Server) handleAutoRefresh(w http.ResponseWriter, r *http.Request) {
+	var req autoRefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	if req.Minutes < 0 {
+		writeErr(w, http.StatusBadRequest, "minutes cannot be negative")
+		return
+	}
+	if req.Minutes > 0 && req.Minutes < config.MinAutoRefreshMinutes {
+		req.Minutes = config.MinAutoRefreshMinutes
+	}
+	cfg := s.Config()
+	cfg.SetAutoRefreshMinutes(req.Minutes)
+	if err := config.Save(s.cfgPath, cfg); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save config: "+err.Error())
+		return
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.mu.Unlock()
+	if s.sched != nil {
+		s.sched.SetInterval(time.Duration(cfg.EffectiveAutoRefreshMinutes()) * time.Minute)
+		writeJSON(w, map[string]any{"ok": true, "autoRefresh": s.sched.State(time.Now())})
+		return
+	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 

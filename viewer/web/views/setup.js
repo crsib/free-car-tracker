@@ -3,7 +3,7 @@
 import { el, mount, card } from '../lib/dom.js';
 import { api } from '../lib/api.js';
 import * as fmt from '../lib/fmt.js';
-import { state, loadVehicles, refreshStatus, navigate } from '../app.js';
+import { state, loadVehicles, refreshStatus, navigate, onStatus } from '../app.js';
 
 export async function renderSetup(view) {
   const status = await api.status();
@@ -89,6 +89,86 @@ export async function renderSetup(view) {
       ' with owner-only permissions.'),
     el('div', { class: 'form-actions' }, testBtn, saveBtn, message));
 
+  // --- updates ---
+
+  // Minutes the picker offers. The saved value is added if it is not one of these, so an
+  // interval set with -auto-refresh does not silently snap to something else on save.
+  const AUTO_CHOICES = [0, 5, 15, 30, 60, 180, 360];
+  const savedMinutes = Number(cfg.autoRefreshMinutes || 0);
+  const choices = AUTO_CHOICES.includes(savedMinutes) ? AUTO_CHOICES : [...AUTO_CHOICES, savedMinutes].sort((a, b) => a - b);
+
+  const autoMessage = el('div', { class: 'form-message' });
+  const autoLine = el('div', { class: 'muted small' });
+  const autoSelect = el('select', {
+    class: 'select',
+    onchange: async (e) => {
+      const minutes = Number(e.target.value);
+      try {
+        await api.setAutoRefresh(minutes);
+        mount(autoMessage, el('span', { class: 'msg msg-ok' },
+          minutes > 0 ? `Checking every ${fmt.interval(minutes)}.` : 'Automatic updates are off.'));
+        refreshStatus();
+      } catch (err) {
+        mount(autoMessage, el('span', { class: 'msg msg-error' }, err.message));
+      }
+    },
+  }, ...choices.map((m) => el('option', { value: String(m), selected: m === savedMinutes },
+    m === 0 ? 'Off — only when I ask' : `Every ${fmt.interval(m)}`)));
+
+  const refreshBtn = el('button', {
+    class: 'btn btn-primary',
+    onclick: async () => {
+      try { await api.refresh(); refreshStatus(); } catch (e) { mount(autoMessage, el('span', { class: 'msg msg-error' }, e.message)); }
+    },
+  }, 'Check for new data');
+
+  const fullBtn = el('button', {
+    class: 'btn',
+    title: 'Re-download every trip.json instead of trusting the cached copies',
+    onclick: async () => {
+      if (!confirm('A full re-read asks the server for every trip manifest again — one request per '
+        + 'trip, so it takes a while on a large folder. Continue?')) return;
+      try { await api.refresh(true); refreshStatus(); } catch (e) { mount(autoMessage, el('span', { class: 'msg msg-error' }, e.message)); }
+    },
+  }, 'Full re-read');
+
+  // The card has to keep up with the poll: a countdown that only moves when you reload the
+  // page is worse than no countdown at all.
+  const paintUpdates = (st) => {
+    const progress = st.progress || {};
+    const auto = st.autoRefresh || {};
+    refreshBtn.disabled = progress.running;
+    fullBtn.disabled = progress.running;
+    if (progress.running) {
+      mount(autoLine, `Reading the folder now — ${progress.message || 'working'}.`);
+      return;
+    }
+    const bits = [];
+    bits.push(st.builtAt ? `Last read ${fmt.relative(new Date(st.builtAt).getTime())}.` : 'Never read yet.');
+    if (!auto.enabled) bits.push('Automatic updates are off.');
+    else if (auto.idle) bits.push('Paused while nothing was reading this server; this page has just resumed it.');
+    else if (auto.nextAt) bits.push(`Next automatic check ${fmt.until(new Date(auto.nextAt).getTime())}.`);
+    mount(autoLine, bits.join(' '));
+  };
+  paintUpdates(status);
+  const unsubscribe = onStatus(paintUpdates);
+
+  const updates = card('Updates',
+    el('p', { class: 'muted' },
+      'New drives appear here once the phone has synced them and the viewer has re-read the '
+      + 'folder. It can do that on a timer, and only while a page is open — with nobody '
+      + 'looking there is nothing to keep fresh, and a hosted server that is walked all night '
+      + 'starts answering with 429s.'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'form-label' }, 'Check automatically'), autoSelect),
+    autoLine,
+    el('div', { class: 'form-actions' }, refreshBtn, fullBtn, autoMessage),
+    el('p', { class: 'muted small' },
+      'A check only lists directories and reads the manifests of trips it has not seen, so it '
+      + 'is cheap. ', el('strong', {}, 'Full re-read'), ' re-downloads every manifest instead of '
+      + 'trusting the cached copies — the thing to try when a trip looks wrong or an upload was '
+      + 'interrupted mid-write.'));
+
   const throttled = status.throttled || 0;
   const pacing = card('Request pacing',
     el('p', { class: 'muted' },
@@ -126,11 +206,6 @@ export async function renderSetup(view) {
     el('div', { class: 'form-actions' },
       el('button', {
         class: 'btn', onclick: async () => {
-          try { await api.refresh(); refreshStatus(); } catch (e) { alert(e.message); }
-        },
-      }, 'Re-index now'),
-      el('button', {
-        class: 'btn', onclick: async () => {
           try { await api.prefetch(); refreshStatus(); } catch (e) { alert(e.message); }
         },
       }, 'Download all trip data'),
@@ -152,6 +227,7 @@ export async function renderSetup(view) {
     el('div', { class: 'page page-narrow' },
       el('h1', { class: 'page-title' }, 'Settings'),
       connection,
+      cfg.configured ? updates : null,
       cfg.configured ? pacing : null,
       cfg.configured ? cacheCard : null,
       warnings,
@@ -159,5 +235,5 @@ export async function renderSetup(view) {
         ? el('div', { class: 'form-actions' },
           el('button', { class: 'btn btn-ghost', onclick: () => navigate('#/') }, 'Back to the dashboard'))
         : null));
-  return null;
+  return { destroy: unsubscribe };
 }

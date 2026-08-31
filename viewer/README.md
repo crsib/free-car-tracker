@@ -66,12 +66,30 @@ account password.
 | `-insecure` | `false` | Skip TLS verification (self-signed home servers only). |
 | `-open` | `true` | Open a browser on start, for loopback listeners. |
 | `-refresh` | `true` | Re-read the WebDAV folder on start. |
+| `-auto-refresh` | `15` | Minutes between automatic re-reads; `0` turns them off. |
 | `-webdav-rps` | `3` | Cap outbound WebDAV requests per second. |
 | `-webdav-retries` | `5` | Retries for a throttled (429/503) request. |
 | `-webdav-concurrency` | `2` | WebDAV requests in flight at once. |
 
-`FCT_WEBDAV_URL`, `FCT_WEBDAV_USERNAME`, `FCT_WEBDAV_PASSWORD`, `FCT_CACHE_DIR` and
-`FCT_WEBDAV_INSECURE` work too, which is the sane way to configure it in a container.
+`FCT_WEBDAV_URL`, `FCT_WEBDAV_USERNAME`, `FCT_WEBDAV_PASSWORD`, `FCT_CACHE_DIR`,
+`FCT_WEBDAV_INSECURE` and `FCT_AUTO_REFRESH_MINUTES` work too, which is the sane way to
+configure it in a container.
+
+### Staying up to date
+
+New drives show up once the phone has synced them **and** the viewer has re-read the folder.
+Settings → Updates controls both halves:
+
+- **Automatically**, every 15 minutes by default. The timer lives in the server, not the page,
+  so several open tabs still mean one walk. It only runs while someone is actually reading —
+  the UI polls `/api/status` every few seconds, and after five minutes of silence the viewer
+  treats itself as unwatched and stops walking. Opening a page resumes it within seconds, so
+  the first thing you see is current data rather than a countdown.
+- **Manually**, with *Refresh* in the header or *Check for new data* in Settings.
+- **Full re-read** re-downloads every `trip.json` instead of trusting the cached copies. A
+  finished trip is immutable, so the ordinary check never re-reads a manifest it already has;
+  this is the escape hatch for when one was cached mid-upload or rewritten in place. It costs
+  one request per trip, so it is not the everyday button.
 
 ### Running it as a web app
 

@@ -76,8 +76,10 @@ type Catalog struct {
 
 // Progress is the live state of an index or prefetch run, polled by the UI.
 type Progress struct {
-	Running    bool      `json:"running"`
-	Phase      string    `json:"phase"`
+	Running bool   `json:"running"`
+	Phase   string `json:"phase"`
+	// Full marks a run that ignores the byte cache, so the UI can say why it is slow.
+	Full       bool      `json:"full,omitempty"`
 	Done       int       `json:"done"`
 	Total      int       `json:"total"`
 	Message    string    `json:"message"`
@@ -181,7 +183,16 @@ func (ix *Index) Cancel() {
 // Refresh rebuilds the catalog in the background. A second call while one is running is a
 // no-op rather than a queued duplicate: two concurrent walks would double the load on the
 // server for an identical result.
-func (ix *Index) Refresh() bool {
+func (ix *Index) Refresh() bool { return ix.refresh(false) }
+
+// RefreshFull rebuilds the catalog and re-downloads every manifest it walks past, ignoring
+// the byte cache. The ordinary refresh trusts a cached trip.json forever, because a finished
+// trip is immutable and re-reading one per trip is exactly the traffic this viewer was tuned
+// to avoid. That assumption is right until it is not - a manifest rewritten in place, or a
+// cache that captured a half-written upload - and this is the escape hatch for it.
+func (ix *Index) RefreshFull() bool { return ix.refresh(true) }
+
+func (ix *Index) refresh(full bool) bool {
 	ix.jobMu.Lock()
 	defer ix.jobMu.Unlock()
 	if ix.Progress().Running {
@@ -189,12 +200,19 @@ func (ix *Index) Refresh() bool {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	ix.cancel = cancel
+	message := "Listing cars"
+	if full {
+		message = "Listing cars (full re-read)"
+	}
 	ix.setProgress(func(p *Progress) {
-		*p = Progress{Running: true, Phase: "index", Message: "Listing cars", StartedAt: time.Now()}
+		*p = Progress{
+			Running: true, Phase: "index", Full: full,
+			Message: message, StartedAt: time.Now(),
+		}
 	})
 	go func() {
 		defer cancel()
-		cat, err := ix.build(ctx)
+		cat, err := ix.build(ctx, full)
 		ix.mu.Lock()
 		if err == nil {
 			ix.catalog = cat
@@ -242,7 +260,7 @@ func (ix *Index) SetConcurrency(n int) {
 	ix.mu.Unlock()
 }
 
-func (ix *Index) build(ctx context.Context) (*Catalog, error) {
+func (ix *Index) build(ctx context.Context, full bool) (*Catalog, error) {
 	client := ix.Client()
 	if client == nil {
 		return nil, errors.New("webdav is not configured")
@@ -303,6 +321,10 @@ func (ix *Index) build(ctx context.Context) (*Catalog, error) {
 			byName[e.Name] = e
 		}
 
+		if full {
+			ix.cache.Forget(v.syncID + "/" + VehicleJSON)
+			ix.cache.Forget(v.syncID + "/" + LedgerJSON)
+		}
 		vb, err := ix.cache.Fetch(ctx, client, v.syncID+"/"+VehicleJSON, byName[VehicleJSON])
 		if err != nil {
 			warn("read %s/%s: %v", v.syncID, VehicleJSON, err)
@@ -340,7 +362,7 @@ func (ix *Index) build(ctx context.Context) (*Catalog, error) {
 			}
 		}
 
-		trips, err := ix.walkTrips(ctx, client, v.syncID, deleted, warn)
+		trips, err := ix.walkTrips(ctx, client, v.syncID, deleted, full, warn)
 		if err != nil {
 			return nil, err
 		}
@@ -367,7 +389,7 @@ func (ix *Index) build(ctx context.Context) (*Catalog, error) {
 // where the round-trips actually are.
 func (ix *Index) walkTrips(
 	ctx context.Context, client *webdav.Client, vehicleSyncID string,
-	deleted map[string]bool, warn func(string, ...any),
+	deleted map[string]bool, full bool, warn func(string, ...any),
 ) ([]TripRecord, error) {
 	years, err := client.List(ctx, vehicleSyncID+"/"+TripsD+"/")
 	if err != nil {
@@ -428,7 +450,7 @@ func (ix *Index) walkTrips(
 			if ctx.Err() != nil {
 				return
 			}
-			rec, ok := ix.readTrip(ctx, client, vehicleSyncID, d.path, d.syncID, warn)
+			rec, ok := ix.readTrip(ctx, client, vehicleSyncID, d.path, d.syncID, full, warn)
 			out[i], found[i] = rec, ok
 			ix.setProgress(func(p *Progress) { p.Done++ })
 		}(i, d)
@@ -461,8 +483,11 @@ func (ix *Index) walkTrips(
 // listing entry, which is the same conclusion for one fewer round trip.
 func (ix *Index) readTrip(
 	ctx context.Context, client *webdav.Client,
-	vehicleSyncID, dir, tripSyncID string, warn func(string, ...any),
+	vehicleSyncID, dir, tripSyncID string, full bool, warn func(string, ...any),
 ) (TripRecord, bool) {
+	if full {
+		ix.cache.Forget(dir + TripJSON)
+	}
 	b, err := ix.cache.Fetch(ctx, client, dir+TripJSON, webdav.Entry{})
 	if err != nil {
 		if errors.Is(err, webdav.ErrNotFound) {

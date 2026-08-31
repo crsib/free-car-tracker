@@ -127,6 +127,7 @@ function renderHeaderStatus() {
       el('div', { class: 'sync running' },
         el('span', { class: 'spin' }),
         el('span', {}, p.message || 'Working'),
+        p.full ? el('span', { class: 'sync-note' }, 'full re-read') : null,
         pct !== null ? el('span', { class: 'sync-pct' }, `${pct}%`) : null,
         el('button', { class: 'btn btn-ghost btn-sm', onclick: () => api.cancel().catch(() => {}) }, 'Stop')));
     return;
@@ -140,6 +141,8 @@ function renderHeaderStatus() {
   // shorter, with nothing to say why. Surface it in the header, not only in Settings.
   const warnings = status.warnings || [];
   const throttled = status.throttled || 0;
+
+  const auto = status.autoRefresh || {};
 
   mount(host,
     el('div', { class: 'sync' },
@@ -163,13 +166,34 @@ function renderHeaderStatus() {
         }, `throttled ×${throttled}`)
         : null,
       el('span', { class: 'sync-text' }, parts.join(' · ') || 'Not indexed'),
+      auto.enabled
+        ? el('a', {
+          class: 'sync-auto',
+          href: '#/settings',
+          title: autoTitle(auto),
+        }, `auto ${fmt.interval(auto.minutes)}`)
+        : null,
       el('button', {
         class: 'btn btn-sm',
-        title: 'Re-read the WebDAV folder',
+        title: 'Re-read the WebDAV folder now',
         onclick: async () => {
           try { await api.refresh(); refreshStatus(); } catch (e) { alert(e.message); }
         },
       }, 'Refresh')));
+}
+
+/** What the auto chip says when you hover it - including why it might be doing nothing. */
+function autoTitle(auto) {
+  const lines = [`The viewer re-reads the WebDAV folder every ${fmt.interval(auto.minutes)} on its own.`, ''];
+  if (auto.idle) {
+    // Idle means the server saw no requests for a while, so it stopped walking for nobody.
+    // This page just made it non-idle again; saying so beats showing an overdue countdown.
+    lines.push('It had paused because nothing was reading this server. This page just woke it '
+      + 'up, so the next check is moments away.');
+  } else if (auto.nextAt) {
+    lines.push(`Next check ${fmt.until(new Date(auto.nextAt).getTime())}.`);
+  }
+  return lines.join('\n');
 }
 
 // --- routing ---

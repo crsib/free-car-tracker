@@ -139,6 +139,25 @@ export function relative(millis) {
   return date(millis);
 }
 
+/** An interval in minutes, as the update settings speak of it: "15 min", "6 h", "Off". */
+export function interval(minutes) {
+  if (!isNum(minutes) || minutes <= 0) return 'off';
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const h = minutes / 60;
+  return `${h % 1 === 0 ? h : h.toFixed(1)} h`;
+}
+
+/** How long until a future timestamp. The counterpart of relative(), which looks backwards. */
+export function until(millis) {
+  if (!isNum(millis)) return dash;
+  const diff = millis - Date.now();
+  if (diff <= 15000) return 'any moment now';
+  const min = 60000, hour = 3600000;
+  if (diff < min) return `in ${Math.round(diff / 1000)} s`;
+  if (diff < hour) return `in ${Math.round(diff / min)} min`;
+  return `in ${Math.round(diff / hour)} h`;
+}
+
 /**
  * Turn SCREAMING_SNAKE enum names into something readable. Acronyms stay upper-case:
  * title-casing them gives "Ice" for an internal combustion engine and "Ac" for AC charging,
