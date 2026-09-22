@@ -7,6 +7,7 @@ import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.domain.ChargePoint
 import me.crsib.freecartracker.domain.EconomyCalculator
 import me.crsib.freecartracker.domain.FuelPoint
+import me.crsib.freecartracker.domain.RecurrenceProjector
 import me.crsib.freecartracker.domain.UnitConversions
 import me.crsib.freecartracker.domain.model.EntryKind
 import me.crsib.freecartracker.domain.model.Recurrence
@@ -54,6 +55,14 @@ data class EntryCardItem(
     val currency: String,
     /** Lower-cased haystack for the History search box. */
     val search: String,
+    /**
+     * True for a billing date this app derived from a recurring expense rather than read from
+     * the ledger: the same amount, dated at the bill. Derived cards cannot be edited or
+     * deleted - [id] points at the entry that defines the rule.
+     */
+    val projected: Boolean = false,
+    /** For a projected card, the date of the entry it repeats. */
+    val anchorDateMillis: Long? = null,
 )
 
 /** Battery level bucket from a charge's end %, for the [AmountBadge] shown by the amount. */
@@ -78,6 +87,7 @@ object EntryCards {
         fuel: List<FuelEntry>,
         charge: List<ChargeEntry>,
         expenses: List<Expense>,
+        nowMillis: Long = System.currentTimeMillis(),
     ): List<EntryCardItem> {
         val system = vehicle.unitSystem
         val dUnit = UnitConversions.distanceUnit(system)
@@ -146,26 +156,36 @@ object EntryCards {
                 )
             }
             expenses.forEach { e ->
-                add(
-                    EntryCardItem(
-                        kind = EntryKind.EXPENSE,
-                        id = e.id,
-                        dateMillis = e.dateMillis,
-                        title = e.category.label(),
-                        subtitle = listOfNotNull(
-                            e.recurrence.takeIf { it != Recurrence.NONE }?.let { rec ->
-                                rec.label() + (e.recurrenceEndMillis?.let { " until ${formatDate(it)}" } ?: "")
-                            },
-                            e.vendor,
-                            e.description,
-                        ).joinToString(" · "),
-                        stats = emptyList(),
-                        amountBadge = null,
-                        amountMinor = e.totalCostMinor,
-                        currency = e.currency,
-                        search = "${e.category.label()} ${e.vendor.orEmpty()} ${e.description.orEmpty()}",
-                    ),
+                fun card(dateMillis: Long, projected: Boolean) = EntryCardItem(
+                    kind = EntryKind.EXPENSE,
+                    id = e.id,
+                    dateMillis = dateMillis,
+                    title = e.category.label(),
+                    subtitle = listOfNotNull(
+                        e.recurrence.takeIf { it != Recurrence.NONE }?.let { rec ->
+                            rec.label() + (e.recurrenceEndMillis?.let { " until ${formatDate(it)}" } ?: "")
+                        },
+                        e.vendor,
+                        e.description,
+                    ).joinToString(" · "),
+                    stats = emptyList(),
+                    amountBadge = null,
+                    amountMinor = e.totalCostMinor,
+                    currency = e.currency,
+                    search = "${e.category.label()} ${e.vendor.orEmpty()} ${e.description.orEmpty()}",
+                    projected = projected,
+                    anchorDateMillis = if (projected) e.dateMillis else null,
                 )
+                // The entry as logged: its own date is the first billing date.
+                add(card(e.dateMillis, projected = false))
+                // ...followed by the bills it stands for, up to today. The dashboard counts
+                // every one of these in its spend total, so without them the history shows a
+                // monthly cost once, years ago, and the total cannot be reconciled with it.
+                RecurrenceProjector
+                    .occurrenceDatesInWindow(
+                        e.dateMillis, e.recurrence, e.dateMillis, nowMillis, e.recurrenceEndMillis,
+                    )
+                    .forEach { date -> if (date != e.dateMillis) add(card(date, projected = true)) }
             }
         }.sortedByDescending { it.dateMillis }
     }

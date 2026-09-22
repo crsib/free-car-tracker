@@ -64,8 +64,20 @@ export async function renderDashboard(view) {
   // --- spend breakdown ---
   const spendCard = card('Where the money went',
     d.buckets.length
-      ? barList(d.buckets.map((b) => ({ label: fmt.label(b.category), value: b.totalMinor })),
-        { format: (value) => fmt.money(value, currency, digits) })
+      ? barList(d.buckets.map((b) => ({
+        // A bucket billed more often than it was logged is a recurring cost counted several
+        // times over. Saying so is the difference between a number you can check and one you
+        // have to trust - the entries themselves are in the Ledger, under "Recurring bills".
+        label: b.bills > b.entries
+          ? el('span', {}, fmt.label(b.category),
+            el('span', {
+              class: 'badge badge-dim',
+              title: `${b.entries} recurring ${b.entries === 1 ? 'entry' : 'entries'}, `
+                + `billed ${b.bills} times in this window`,
+            }, `×${b.bills} bills`))
+          : fmt.label(b.category),
+        value: b.totalMinor,
+      })), { format: (value) => fmt.money(value, currency, digits) })
       : empty('No spending recorded in this window'));
 
   // --- per-source running cost ---

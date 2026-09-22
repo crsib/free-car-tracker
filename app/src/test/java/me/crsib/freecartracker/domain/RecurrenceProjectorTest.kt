@@ -82,4 +82,17 @@ class RecurrenceProjectorTest {
         // Anchored Jan 15, ends May 15. Window Mar 20 - Jun 19 covers Apr 15 and May 15 = 2.
         assertEquals(2, count("2026-01-15", Recurrence.MONTHLY, "2026-03-20", "2026-06-19", end = "2026-05-15"))
     }
+    @Test
+    fun `the dates behind a count are the billing dates themselves`() {
+        val dates = RecurrenceProjector.occurrenceDatesInWindow(
+            startMillis = millis("2026-01-15"),
+            recurrence = Recurrence.MONTHLY,
+            windowStart = millis("2026-04-01"),
+            windowEnd = millis("2026-06-30"),
+            zone = utc,
+        )
+        assertEquals(listOf(millis("2026-04-15"), millis("2026-05-15"), millis("2026-06-15")), dates)
+        // The count is just how many there are - one walk, two callers.
+        assertEquals(dates.size, count("2026-01-15", Recurrence.MONTHLY, "2026-04-01", "2026-06-30"))
+    }
 }

@@ -16,10 +16,8 @@ object RecurrenceProjector {
 
     /**
      * Number of billing dates in `[windowStart, windowEnd]` for a charge anchored at
-     * [startMillis] recurring with [recurrence]. A one-off ([Recurrence.NONE]) counts once if
-     * its own date is in the window. Occurrences before the window (e.g. a loan started months
-     * ago) are skipped. When [endMillis] is non-null, no bill after that date is counted, so a
-     * fixed-term loan stops on its final payment; null means the cost recurs indefinitely.
+     * [startMillis]. See [occurrenceDatesInWindow] for the rules; this is its size, kept as a
+     * separate call because the dashboard only ever needs the count.
      */
     fun occurrencesInWindow(
         startMillis: Long,
@@ -28,21 +26,41 @@ object RecurrenceProjector {
         windowEnd: Long,
         endMillis: Long? = null,
         zone: ZoneId = ZoneId.systemDefault(),
-    ): Int {
-        if (windowEnd < windowStart) return 0
+    ): Int = occurrenceDatesInWindow(startMillis, recurrence, windowStart, windowEnd, endMillis, zone).size
+
+    /**
+     * The billing dates in `[windowStart, windowEnd]` for a charge anchored at [startMillis],
+     * in order. A one-off ([Recurrence.NONE]) yields its own date if that is in the window.
+     * Occurrences before the window (e.g. a loan started months ago) are skipped. When
+     * [endMillis] is non-null, no bill after that date is counted, so a fixed-term loan stops
+     * on its final payment; null means the cost recurs indefinitely.
+     *
+     * The anchor is itself the first bill, so it appears in the result whenever it is in
+     * range - callers that show the logged entry separately must skip it to avoid listing it
+     * twice.
+     */
+    fun occurrenceDatesInWindow(
+        startMillis: Long,
+        recurrence: Recurrence,
+        windowStart: Long,
+        windowEnd: Long,
+        endMillis: Long? = null,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): List<Long> {
+        if (windowEnd < windowStart) return emptyList()
         // Bills never occur after the recurrence end, so clamp the window's upper bound.
         val upper = if (endMillis != null) minOf(windowEnd, endMillis) else windowEnd
-        if (upper < windowStart) return 0
+        if (upper < windowStart) return emptyList()
         if (recurrence == Recurrence.NONE) {
-            return if (startMillis in windowStart..upper) 1 else 0
+            return if (startMillis in windowStart..upper) listOf(startMillis) else emptyList()
         }
         var occ = Instant.ofEpochMilli(startMillis).atZone(zone)
-        var count = 0
+        val dates = mutableListOf<Long>()
         var guard = 0
         while (guard++ < GUARD) {
             val ms = occ.toInstant().toEpochMilli()
             if (ms > upper) break
-            if (ms >= windowStart) count++
+            if (ms >= windowStart) dates += ms
             occ = when (recurrence) {
                 Recurrence.WEEKLY -> occ.plusWeeks(1)
                 Recurrence.MONTHLY -> occ.plusMonths(1)
@@ -51,6 +69,6 @@ object RecurrenceProjector {
                 Recurrence.NONE -> break
             }
         }
-        return count
+        return dates
     }
 }

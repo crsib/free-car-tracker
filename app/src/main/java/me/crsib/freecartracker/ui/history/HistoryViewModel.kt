@@ -75,6 +75,8 @@ class HistoryViewModel(
     fun setQuery(q: String) { query.value = q }
 
     fun delete(item: EntryCardItem) = viewModelScope.launch {
+        // A projected bill has no row of its own; deleting it would delete the rule behind it.
+        if (item.projected) return@launch
         when (item.kind) {
             EntryKind.FUEL -> entryRepo.deleteFuel(item.id)
             EntryKind.CHARGE -> entryRepo.deleteCharge(item.id)

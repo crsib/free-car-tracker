@@ -30,6 +30,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -109,6 +110,22 @@ private fun StatChip(stat: EntryStat) {
     }
 }
 
+/** Marks a card the app derived from a recurring expense rather than read from the ledger. */
+@Composable
+private fun ProjectedChip() {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraSmall,
+    ) {
+        Text(
+            "projected",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+        )
+    }
+}
+
 /**
  * One ledger entry as a tappable card. Used by History and by the dashboard's recent entries.
  * The overflow menu appears only when [onDelete] is supplied.
@@ -122,6 +139,9 @@ fun EntryCard(
     onDelete: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
+    // A projected bill is derived, not stored: editing or deleting it would act on the rule
+    // behind it. Tapping still opens that entry, but the destructive menu is not offered.
+    val onDeleteEntry = if (item.projected) null else onDelete
     Card(modifier = modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             Modifier
@@ -130,7 +150,7 @@ fun EntryCard(
                     start = 16.dp,
                     top = 10.dp,
                     bottom = 10.dp,
-                    end = if (onDelete != null) 4.dp else 16.dp,
+                    end = if (onDeleteEntry != null) 4.dp else 16.dp,
                 ),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -158,16 +178,26 @@ fun EntryCard(
                 } else if (item.subtitle.isNotBlank()) {
                     Text(item.subtitle, style = MaterialTheme.typography.bodySmall)
                 }
-                Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(formatDate(item.dateMillis), style = MaterialTheme.typography.bodySmall)
+                    if (item.projected) ProjectedChip()
+                }
             }
-            Text(formatMoney(item.amountMinor, item.currency), fontWeight = FontWeight.SemiBold)
-            if (onDelete != null) {
+            Text(
+                formatMoney(item.amountMinor, item.currency),
+                fontWeight = if (item.projected) FontWeight.Medium else FontWeight.SemiBold,
+                color = if (item.projected) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
+            )
+            if (onDeleteEntry != null) {
                 IconButton(onClick = { menu = true }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "More")
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Edit") }, onClick = { menu = false; onClick() })
-                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDeleteEntry() })
                 }
             }
         }

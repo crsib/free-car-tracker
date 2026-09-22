@@ -121,6 +121,11 @@ func ledgerDates(v store.VehicleRecord) []int64 {
 type categoryTotal struct {
 	Category   string `json:"category"`
 	TotalMinor int64  `json:"totalMinor"`
+	// Entries is how many logged entries fed this bucket, Bills how many billing dates they
+	// expanded to. Bills > Entries means a recurring cost was counted more than once; the UI
+	// says so out loud, because otherwise the total cannot be reconciled with the ledger.
+	Entries int `json:"entries"`
+	Bills   int `json:"bills"`
 }
 
 type trendPoint struct {
@@ -202,6 +207,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	var windowFuelL, windowKwh float64
 	var fuelCost, chargeCost int64
+	var fuelEntries, chargeEntries int
 	var purchases []domain.EnergyPurchase
 	for _, f := range fuel {
 		if f.DateMillis < since {
@@ -210,6 +216,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		windowFuelL += f.VolumeL
 		if f.DateMillis <= now {
 			fuelCost += f.TotalCostMinor
+			fuelEntries++
 			ft := ""
 			if f.FuelType != nil {
 				ft = *f.FuelType
@@ -226,6 +233,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		windowKwh += c.EnergyKwh
 		if c.DateMillis <= now {
 			chargeCost += c.TotalCostMinor
+			chargeEntries++
 			purchases = append(purchases, domain.EnergyPurchase{
 				Source: domain.Electricity, CostMinor: c.TotalCostMinor, Quantity: c.EnergyKwh,
 			})
@@ -235,6 +243,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Recurring expenses are expanded so every billing date inside the window counts, even
 	// though the entry was logged once.
 	expenseBuckets := map[string]int64{}
+	expenseBills := map[string]int{}
+	expenseEntries := map[string]int{}
 	var bucketOrder []string
 	for _, e := range expenses {
 		var end int64
@@ -249,6 +259,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			bucketOrder = append(bucketOrder, e.Category)
 		}
 		expenseBuckets[e.Category] += e.TotalCostMinor * int64(bills)
+		expenseBills[e.Category] += bills
+		expenseEntries[e.Category]++
 	}
 
 	total := fuelCost + chargeCost
@@ -256,14 +268,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		total += v
 	}
 	buckets := []categoryTotal{}
+	// A fill or a charge is billed the day it happens, so for those a bill *is* an entry.
 	if fuelCost > 0 {
-		buckets = append(buckets, categoryTotal{"FUEL", fuelCost})
+		buckets = append(buckets, categoryTotal{"FUEL", fuelCost, fuelEntries, fuelEntries})
 	}
 	if chargeCost > 0 {
-		buckets = append(buckets, categoryTotal{"CHARGE", chargeCost})
+		buckets = append(buckets, categoryTotal{"CHARGE", chargeCost, chargeEntries, chargeEntries})
 	}
 	for _, k := range bucketOrder {
-		buckets = append(buckets, categoryTotal{k, expenseBuckets[k]})
+		buckets = append(buckets, categoryTotal{k, expenseBuckets[k], expenseEntries[k], expenseBills[k]})
 	}
 	sort.SliceStable(buckets, func(i, j int) bool { return buckets[i].TotalMinor > buckets[j].TotalMinor })
 
@@ -342,6 +355,10 @@ type ledgerRow struct {
 	Note           string   `json:"note"`
 	Recurrence     string   `json:"recurrence,omitempty"`
 	UnitPriceMinor *float64 `json:"unitPriceMinor,omitempty"`
+	// Projected marks a row the ledger derived rather than read: a repeat of a recurring
+	// expense, dated at its billing date. AnchorDateMillis is the logged entry it repeats.
+	Projected        bool  `json:"projected,omitempty"`
+	AnchorDateMillis int64 `json:"anchorDateMillis,omitempty"`
 }
 
 func str(p *string) string {
@@ -367,6 +384,9 @@ func (s *Server) ledgerRows(r *http.Request, cat *store.Catalog) []ledgerRow {
 	}
 	from := int64Param(r, "from", 0)
 	to := int64Param(r, "to", 0)
+	// Projected repeats are on unless asked for the logged entries alone.
+	withBills := r.URL.Query().Get("bills") != "0"
+	now := time.Now().UnixMilli()
 
 	inRange := func(d int64) bool {
 		return (from == 0 || d >= from) && (to == 0 || d <= to)
@@ -411,16 +431,50 @@ func (s *Server) ledgerRows(r *http.Request, cat *store.Catalog) []ledgerRow {
 		}
 		if want("EXPENSE") {
 			for _, e := range v.Ledger.Expenses {
-				if !inRange(e.DateMillis) {
+				row := func(date int64, projected bool) ledgerRow {
+					lr := ledgerRow{
+						Kind: "EXPENSE", SyncID: e.SyncID, VehicleSyncID: v.SyncID, VehicleName: v.Vehicle.Name,
+						DateMillis: date, OdometerKm: e.OdometerKm,
+						TotalCostMinor: e.TotalCostMinor, Currency: e.Currency, FractionDigits: digits,
+						Category: e.Category, Detail: str(e.Vendor), Note: str(e.Description),
+						Recurrence: e.Recurrence,
+					}
+					if projected {
+						lr.Projected = true
+						lr.AnchorDateMillis = e.DateMillis
+						// The odometer was read on the day the entry was logged; carrying it
+						// onto a later bill would invent a reading that was never taken.
+						lr.OdometerKm = nil
+					}
+					return lr
+				}
+				// The entry as logged. Its own date is the first billing date.
+				if inRange(e.DateMillis) {
+					rows = append(rows, row(e.DateMillis, false))
+				}
+				if !withBills || e.Recurrence == "" || e.Recurrence == "NONE" {
 					continue
 				}
-				rows = append(rows, ledgerRow{
-					Kind: "EXPENSE", SyncID: e.SyncID, VehicleSyncID: v.SyncID, VehicleName: v.Vehicle.Name,
-					DateMillis: e.DateMillis, OdometerKm: e.OdometerKm,
-					TotalCostMinor: e.TotalCostMinor, Currency: e.Currency, FractionDigits: digits,
-					Category: e.Category, Detail: str(e.Vendor), Note: str(e.Description),
-					Recurrence: e.Recurrence,
-				})
+				// ...and the repeats it stands for. Without these a date-filtered ledger cannot
+				// be reconciled with the dashboard, which counts every billing date in its
+				// window, and a monthly cost anchored years ago shows up in no window at all.
+				var end int64
+				if e.RecurrenceEndMillis != nil {
+					end = *e.RecurrenceEndMillis
+				}
+				lower, upper := from, to
+				if lower == 0 {
+					lower = e.DateMillis
+				}
+				if upper == 0 {
+					upper = now
+				}
+				for _, d := range domain.OccurrenceDatesInWindow(e.DateMillis, e.Recurrence, lower, upper, end, time.Local) {
+					if d == e.DateMillis {
+						continue // already listed as the logged entry
+					}
+					rows = append(rows, row(d, true))
+				}
 			}
 		}
 	}
@@ -449,7 +503,8 @@ func (s *Server) handleLedgerCSV(w http.ResponseWriter, r *http.Request) {
 	defer cw.Flush()
 	_ = cw.Write([]string{
 		"kind", "vehicle", "date", "dateMillis", "odometerKm", "quantity", "quantityUnit",
-		"total", "currency", "unitPrice", "category", "fullTank", "detail", "note", "recurrence", "syncId",
+		"total", "currency", "unitPrice", "category", "fullTank", "detail", "note", "recurrence",
+		"projected", "anchorDate", "syncId",
 	})
 	for _, row := range rows {
 		major := func(minor float64) string {
@@ -471,7 +526,12 @@ func (s *Server) handleLedgerCSV(w http.ResponseWriter, r *http.Request) {
 		if row.IsFullTank != nil {
 			full = strconv.FormatBool(*row.IsFullTank)
 		}
-		rec = append(rec, row.Category, full, row.Detail, row.Note, row.Recurrence, row.SyncID)
+		anchor := ""
+		if row.AnchorDateMillis != 0 {
+			anchor = time.UnixMilli(row.AnchorDateMillis).Format(time.RFC3339)
+		}
+		rec = append(rec, row.Category, full, row.Detail, row.Note, row.Recurrence,
+			strconv.FormatBool(row.Projected), anchor, row.SyncID)
 		_ = cw.Write(rec)
 	}
 }

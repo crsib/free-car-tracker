@@ -90,39 +90,49 @@ func TotalEnergyCostPerKmMinor(purchases []EnergyPurchase, distanceKm *float64) 
 const recurrenceGuard = 100_000
 
 // OccurrencesInWindow counts billing dates in [windowStart, windowEnd] for a charge anchored
-// at startMillis. A one-off ("NONE") counts once if its own date falls in the window;
-// occurrences before the window are skipped; endMillis (when non-zero) stops a fixed-term
-// cost on its final payment. Calendar arithmetic runs in loc so a monthly bill keeps its
-// day-of-month across DST, matching the Kotlin using ZoneId.systemDefault().
+// at startMillis. See OccurrenceDatesInWindow for the rules; this is its length, kept as a
+// separate call because the dashboard only ever needs the count.
 func OccurrencesInWindow(startMillis int64, recurrence string, windowStart, windowEnd int64, endMillis int64, loc *time.Location) int {
+	return len(OccurrenceDatesInWindow(startMillis, recurrence, windowStart, windowEnd, endMillis, loc))
+}
+
+// OccurrenceDatesInWindow lists the billing dates in [windowStart, windowEnd] for a charge
+// anchored at startMillis, in order. A one-off ("NONE") yields its own date if that falls in
+// the window; occurrences before the window are skipped; endMillis (when non-zero) stops a
+// fixed-term cost on its final payment. Calendar arithmetic runs in loc so a monthly bill
+// keeps its day-of-month across DST, matching the Kotlin using ZoneId.systemDefault().
+//
+// The anchor is itself the first bill, so it appears in the result whenever it is in range -
+// callers that render the logged entry separately must skip it to avoid showing it twice.
+func OccurrenceDatesInWindow(startMillis int64, recurrence string, windowStart, windowEnd int64, endMillis int64, loc *time.Location) []int64 {
 	if windowEnd < windowStart {
-		return 0
+		return nil
 	}
 	upper := windowEnd
 	if endMillis != 0 && endMillis < upper {
 		upper = endMillis
 	}
 	if upper < windowStart {
-		return 0
+		return nil
 	}
 	if recurrence == "" || recurrence == "NONE" {
 		if startMillis >= windowStart && startMillis <= upper {
-			return 1
+			return []int64{startMillis}
 		}
-		return 0
+		return nil
 	}
 	if loc == nil {
 		loc = time.Local
 	}
 	occ := time.UnixMilli(startMillis).In(loc)
-	count := 0
+	var dates []int64
 	for guard := 0; guard < recurrenceGuard; guard++ {
 		ms := occ.UnixMilli()
 		if ms > upper {
 			break
 		}
 		if ms >= windowStart {
-			count++
+			dates = append(dates, ms)
 		}
 		switch recurrence {
 		case "WEEKLY":
@@ -134,8 +144,8 @@ func OccurrencesInWindow(startMillis int64, recurrence string, windowStart, wind
 		case "YEARLY":
 			occ = occ.AddDate(1, 0, 0)
 		default:
-			return count
+			return dates
 		}
 	}
-	return count
+	return dates
 }

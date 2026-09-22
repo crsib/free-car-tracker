@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import me.crsib.freecartracker.data.VehicleSelection
-import me.crsib.freecartracker.data.dao.CategoryTotal
 import me.crsib.freecartracker.data.entity.Vehicle
 import me.crsib.freecartracker.data.prefs.AppPreferences
 import me.crsib.freecartracker.data.repository.EntryRepository
@@ -49,9 +48,22 @@ data class DashboardUiState(
     val energyCostPerKmMinor: Double? = null,
     /** Cost per km contributed by each fuel type and by electricity, biggest spender first. */
     val energyCostShares: List<EnergyCostShare> = emptyList(),
-    val buckets: List<CategoryTotal> = emptyList(),
+    val buckets: List<SpendBucket> = emptyList(),
     val trend: List<TrendPoint> = emptyList(),
     val recent: List<EntryCardItem> = emptyList(),
+)
+
+/**
+ * A spend bucket on the dashboard: what a category cost in the window, and the expansion
+ * behind it. [entries] is how many entries were logged, [bills] how many billing dates they
+ * came to - they differ exactly when a recurring cost was counted more than once, which the
+ * screen says out loud so the total can be checked against History.
+ */
+data class SpendBucket(
+    val bucket: String,
+    val totalMinor: Long,
+    val entries: Int,
+    val bills: Int,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -120,19 +132,26 @@ class DashboardViewModel(
             val fuelCost = windowFuel.sumOf { it.totalCostMinor }
             val chargeCost = windowCharge.sumOf { it.totalCostMinor }
             val expenseBuckets = LinkedHashMap<String, Long>()
+            val expenseBills = LinkedHashMap<String, Int>()
+            val expenseEntries = LinkedHashMap<String, Int>()
             expenses.forEach { e ->
                 val bills = RecurrenceProjector.occurrencesInWindow(
                     e.dateMillis, e.recurrence, since, now, e.recurrenceEndMillis,
                 )
                 if (bills > 0) {
                     expenseBuckets.merge(e.category.name, e.totalCostMinor * bills, Long::plus)
+                    expenseBills.merge(e.category.name, bills, Int::plus)
+                    expenseEntries.merge(e.category.name, 1, Int::plus)
                 }
             }
             val total = fuelCost + chargeCost + expenseBuckets.values.sum()
             val buckets = buildList {
-                if (fuelCost > 0) add(CategoryTotal("FUEL", fuelCost))
-                if (chargeCost > 0) add(CategoryTotal("CHARGE", chargeCost))
-                expenseBuckets.forEach { (key, value) -> add(CategoryTotal(key, value)) }
+                // A fill or a charge is billed the day it happens, so there a bill *is* an entry.
+                if (fuelCost > 0) add(SpendBucket("FUEL", fuelCost, windowFuel.size, windowFuel.size))
+                if (chargeCost > 0) add(SpendBucket("CHARGE", chargeCost, windowCharge.size, windowCharge.size))
+                expenseBuckets.forEach { (key, value) ->
+                    add(SpendBucket(key, value, expenseEntries[key] ?: 0, expenseBills[key] ?: 0))
+                }
             }.sortedByDescending { it.totalMinor }
 
             val segments = EconomyCalculator.fuelSegments(fuelPoints)
@@ -177,6 +196,8 @@ class DashboardViewModel(
     fun setWindowDays(days: Int) = viewModelScope.launch { prefs.setDashboardWindowDays(days) }
 
     fun delete(item: EntryCardItem) = viewModelScope.launch {
+        // A projected bill has no row of its own; deleting it would delete the rule behind it.
+        if (item.projected) return@launch
         when (item.kind) {
             EntryKind.FUEL -> entryRepo.deleteFuel(item.id)
             EntryKind.CHARGE -> entryRepo.deleteCharge(item.id)

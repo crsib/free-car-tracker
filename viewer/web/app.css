@@ -240,6 +240,11 @@ th.sorted { color: var(--accent); }
 
 .row-link { cursor: pointer; }
 
+/* A derived row: a billing date of a recurring expense, not something anyone wrote down.
+   Dimmed so a ledger read top to bottom still reads as a list of entries. */
+.row-projected td { opacity: 0.72; }
+.row-projected .strong { font-weight: 500; }
+
 /* --- badges --- */
 
 .badge {

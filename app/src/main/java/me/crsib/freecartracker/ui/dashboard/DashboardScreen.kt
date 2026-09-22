@@ -239,7 +239,23 @@ fun DashboardScreen(
                                     Modifier.fillMaxWidth().padding(top = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(costBucketLabel(bucket.bucket), modifier = Modifier.weight(1f))
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        Text(costBucketLabel(bucket.bucket))
+                                        // A category billed more often than it was logged is a
+                                        // recurring cost counted several times over; the bills
+                                        // themselves are in History, marked "projected".
+                                        if (bucket.bills > bucket.entries) {
+                                            Text(
+                                                "×${bucket.bills} bills",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
                                     Text(formatMoney(bucket.totalMinor, vehicle.currency))
                                 }
                                 androidx.compose.material3.LinearProgressIndicator(

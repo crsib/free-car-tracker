@@ -11,6 +11,15 @@ const KINDS = [
   { key: 'EXPENSE', label: 'Expenses' },
 ];
 
+// Same choices as the dashboard, so a ledger filtered to a window can be read against the
+// spend total for that window - which is the point of showing projected bills at all.
+const WINDOWS = [
+  { days: 0, label: 'All time' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 365, label: '1 year' },
+];
+
 const COLUMNS = [
   { key: 'dateMillis', label: 'Date', numeric: true },
   { key: 'kind', label: 'Kind' },
@@ -27,6 +36,10 @@ const COLUMNS = [
 const filters = {
   kinds: new Set(KINDS.map((k) => k.key)),
   allCars: false,
+  // Repeats of recurring expenses, derived by the server. On by default: leaving them out is
+  // what made a monthly cost anchored years ago show up in no recent window at all.
+  bills: true,
+  windowDays: 0,
   search: '',
   sortKey: 'dateMillis',
   sortAsc: false,
@@ -35,7 +48,11 @@ const filters = {
 export async function renderLedger(view) {
   const vehicle = selectedVehicle();
   const vehicleParam = filters.allCars || !vehicle ? '' : vehicle.syncId;
-  const rows = await api.ledger({ vehicle: vehicleParam });
+  const billsParam = filters.bills ? null : 0;
+  const now = Date.now();
+  const from = filters.windowDays ? now - filters.windowDays * 86400000 : null;
+  const query = { vehicle: vehicleParam, bills: billsParam, from, to: from ? now : null };
+  const rows = await api.ledger(query);
   const units = vehicle ? vehicle.units : null;
 
   const searchInput = el('input', {
@@ -59,9 +76,19 @@ export async function renderLedger(view) {
         type: 'checkbox', checked: filters.allCars,
         onchange: (e) => { filters.allCars = e.target.checked; renderLedger(view); },
       }), ' All cars'),
+    el('select', {
+      class: 'select select-sm', title: 'Date range',
+      onchange: (e) => { filters.windowDays = Number(e.target.value); renderLedger(view); },
+    }, ...WINDOWS.map((w) => el('option', { value: String(w.days), selected: w.days === filters.windowDays }, w.label))),
+    el('label', { class: 'check', title: 'Show each billing date of a recurring expense, not just the entry that defines it' },
+      el('input', {
+        type: 'checkbox', checked: filters.bills,
+        onchange: (e) => { filters.bills = e.target.checked; renderLedger(view); },
+      }), ' Recurring bills'),
     searchInput,
     el('a', {
-      class: 'btn', href: urls.ledgerCsv({ vehicle: vehicleParam, kind: [...filters.kinds].join(',') }),
+      class: 'btn',
+      href: urls.ledgerCsv({ ...query, kind: [...filters.kinds].join(',') }),
     }, 'Export CSV'));
 
   const tbody = el('tbody', {});
@@ -101,15 +128,23 @@ export async function renderLedger(view) {
     const digits = list.length ? list[0].fractionDigits : 2;
     const currency = list.length ? list[0].currency : (units && units.currency);
 
-    mount(summary, `${list.length} entries · ${fmt.money(total, currency, digits)} total`);
-    mount(tbody, ...list.map((r) => el('tr', {},
+    const projected = list.filter((r) => r.projected).length;
+    mount(summary,
+      `${list.length - projected} entries${projected ? ` · ${projected} projected bills` : ''}`
+      + ` · ${fmt.money(total, currency, digits)} total`);
+    mount(tbody, ...list.map((r) => el('tr', { class: r.projected ? 'row-projected' : null },
       el('td', { class: 'nowrap' }, fmt.date(r.dateMillis)),
       el('td', {}, el('span', { class: `badge badge-${r.kind.toLowerCase()}` }, KINDS.find((k) => k.key === r.kind).label)),
       el('td', {},
         fmt.label(r.category),
         r.isFullTank === true ? el('span', { class: 'badge badge-dim', title: 'Full tank' }, 'full') : null,
         r.recurrence && r.recurrence !== 'NONE'
-          ? el('span', { class: 'badge badge-dim', title: 'Recurring cost' }, fmt.label(r.recurrence)) : null),
+          ? el('span', { class: 'badge badge-dim', title: 'Recurring cost' }, fmt.label(r.recurrence)) : null,
+        r.projected
+          ? el('span', {
+            class: 'badge badge-dim',
+            title: `Billed on this date by the entry logged ${fmt.date(r.anchorDateMillis)}`,
+          }, 'projected') : null),
       el('td', { class: 'num' }, fmt.isNum(r.odometerKm) ? fmt.distance(r.odometerKm, units) : '—'),
       el('td', { class: 'num' }, r.quantity === null || r.quantity === undefined
         ? '—'
