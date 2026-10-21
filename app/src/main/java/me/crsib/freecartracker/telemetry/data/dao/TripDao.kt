@@ -31,6 +31,13 @@ interface TripDao {
     @Query("UPDATE trips SET syncedAtMillis = :syncedAtMillis WHERE id = :id")
     suspend fun markSynced(id: Long, syncedAtMillis: Long)
 
+    /**
+     * Forget every upload, so the next sync offers all trips to the target again. Used when the
+     * target changes: "synced" only ever meant "present on the server we used to sync with".
+     */
+    @Query("UPDATE trips SET syncedAtMillis = NULL WHERE syncedAtMillis IS NOT NULL")
+    suspend fun clearSynced(): Int
+
     /** Any trip still flagged as recording — used to recover after process death. */
     @Query("SELECT * FROM trips WHERE status = :status ORDER BY startedAtMillis DESC LIMIT 1")
     suspend fun latestWithStatus(status: TripStatus = TripStatus.RECORDING): Trip?

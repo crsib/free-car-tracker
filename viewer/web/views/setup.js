@@ -1,4 +1,4 @@
-// Settings: connect to a WebDAV server, and manage the local cache.
+// Settings: connect to a WebDAV server or S3 bucket, and manage the local cache.
 
 import { el, mount, card } from '../lib/dom.js';
 import { api } from '../lib/api.js';
@@ -10,6 +10,9 @@ export async function renderSetup(view) {
   state.status = status;
   const cfg = status.config || {};
 
+  let backend = cfg.backend || 'webdav';
+  const s3 = cfg.s3 || {};
+
   const urlInput = el('input', {
     class: 'input', type: 'url', value: cfg.url || '', placeholder: 'https://cloud.example.com/remote.php/dav/files/me/CarTracker/',
   });
@@ -19,6 +22,22 @@ export async function renderSetup(view) {
     placeholder: cfg.hasPassword ? 'unchanged — leave blank to keep it' : '',
   });
   const insecureInput = el('input', { type: 'checkbox', checked: cfg.insecure || false });
+
+  const s3EndpointInput = el('input', {
+    class: 'input', type: 'url', value: s3.endpoint || '',
+    placeholder: 'https://s3.eu-central-1.amazonaws.com — empty means AWS',
+  });
+  const s3RegionInput = el('input', { class: 'input', type: 'text', value: s3.region || '', placeholder: 'us-east-1 (R2: auto)' });
+  const s3BucketInput = el('input', { class: 'input', type: 'text', value: s3.bucket || '' });
+  const s3PrefixInput = el('input', {
+    class: 'input', type: 'text', value: s3.prefix || '', placeholder: 'CarTracker — empty for the bucket root',
+  });
+  const s3KeyInput = el('input', { class: 'input', type: 'text', value: s3.accessKey || '', autocomplete: 'off' });
+  const s3SecretInput = el('input', {
+    class: 'input', type: 'password', autocomplete: 'off',
+    placeholder: s3.hasSecret ? 'unchanged — leave blank to keep it' : '',
+  });
+  const s3VirtualHostInput = el('input', { type: 'checkbox', checked: s3.virtualHost || false });
   const rpsInput = el('input', {
     class: 'input', type: 'number', min: '0.2', step: '0.1', value: String(cfg.rps ?? 3),
   });
@@ -31,6 +50,16 @@ export async function renderSetup(view) {
   const message = el('div', { class: 'form-message' });
 
   const payload = () => ({
+    backend,
+    s3: {
+      endpoint: s3EndpointInput.value.trim(),
+      region: s3RegionInput.value.trim(),
+      bucket: s3BucketInput.value.trim(),
+      prefix: s3PrefixInput.value.trim(),
+      accessKey: s3KeyInput.value.trim(),
+      secretKey: s3SecretInput.value,
+      virtualHost: s3VirtualHostInput.checked,
+    },
     url: urlInput.value.trim(),
     username: userInput.value.trim(),
     password: passInput.value,
@@ -49,7 +78,9 @@ export async function renderSetup(view) {
       setMessage('Testing…', 'info');
       try {
         await api.test(payload());
-        setMessage('Connected. The URL and credentials work.', 'ok');
+        setMessage(backend === 's3'
+          ? 'Connected. The bucket and keys work.'
+          : 'Connected. The URL and credentials work.', 'ok');
       } catch (err) {
         setMessage(err.message, 'error');
       }
@@ -63,7 +94,8 @@ export async function renderSetup(view) {
         const res = await api.setup(payload());
         state.status.config = res.config;
         passInput.value = '';
-        setMessage('Saved. Reading your WebDAV folder now…', 'ok');
+        s3SecretInput.value = '';
+        setMessage(backend === 's3' ? 'Saved. Reading your bucket now…' : 'Saved. Reading your WebDAV folder now…', 'ok');
         refreshStatus();
         await loadVehicles();
       } catch (err) {
@@ -72,7 +104,12 @@ export async function renderSetup(view) {
     },
   }, 'Save and index');
 
-  const connection = card('WebDAV server',
+  const insecureRow = () => [
+    el('label', { class: 'form-label' }, 'Self-signed TLS'),
+    el('div', { class: 'form-inline' }, insecureInput,
+      el('span', { class: 'muted' }, 'Skip certificate verification (only for a home server)'))];
+
+  const webdavFields = () => [
     el('p', { class: 'muted' },
       'Point this at the same folder the phone app syncs to. The viewer only ever reads: it '
       + 'issues GET and PROPFIND, never PUT, MKCOL or DELETE.'),
@@ -80,13 +117,48 @@ export async function renderSetup(view) {
       el('label', { class: 'form-label' }, 'Directory URL'), urlInput,
       el('label', { class: 'form-label' }, 'Username'), userInput,
       el('label', { class: 'form-label' }, 'Password'), passInput,
-      el('label', { class: 'form-label' }, 'Self-signed TLS'),
-      el('div', { class: 'form-inline' }, insecureInput,
-        el('span', { class: 'muted' }, 'Skip certificate verification (only for a home server)'))),
+      ...insecureRow()),
     el('p', { class: 'muted small' },
       'On Nextcloud, create a dedicated app password under Settings → Security rather than using '
       + 'your account password. It is stored in ', el('code', {}, 'config.json'),
-      ' with owner-only permissions.'),
+      ' with owner-only permissions.')];
+
+  const s3Fields = () => [
+    el('p', { class: 'muted' },
+      'Point this at the same bucket and folder the phone app syncs to — AWS or any '
+      + 'S3-compatible store (MinIO, Cloudflare R2, Backblaze B2, Yandex Object Storage). The '
+      + 'viewer only ever reads: it lists and downloads objects, never writes or deletes.'),
+    el('div', { class: 'form-grid' },
+      el('label', { class: 'form-label' }, 'Endpoint'), s3EndpointInput,
+      el('label', { class: 'form-label' }, 'Region'), s3RegionInput,
+      el('label', { class: 'form-label' }, 'Bucket'), s3BucketInput,
+      el('label', { class: 'form-label' }, 'Folder in bucket'), s3PrefixInput,
+      el('label', { class: 'form-label' }, 'Access key ID'), s3KeyInput,
+      el('label', { class: 'form-label' }, 'Secret access key'), s3SecretInput,
+      el('label', { class: 'form-label' }, 'Addressing'),
+      el('div', { class: 'form-inline' }, s3VirtualHostInput,
+        el('span', { class: 'muted' }, 'Virtual-hosted (bucket.host) — leave off unless your provider requires it')),
+      ...insecureRow()),
+    el('p', { class: 'muted small' },
+      'Give the viewer its own key, limited to reading this bucket (s3:ListBucket and '
+      + 's3:GetObject). It is stored in ', el('code', {}, 'config.json'),
+      ' with owner-only permissions.')];
+
+  // The inputs live outside the re-render, so switching backends and back keeps what was typed.
+  const fields = el('div', {});
+  const backendPicker = el('div', { class: 'segmented' });
+  const paintBackend = () => {
+    mount(backendPicker, ...[['webdav', 'WebDAV'], ['s3', 'S3']].map(([key, label]) => el('button', {
+      class: backend === key ? 'seg active' : 'seg',
+      onclick: () => { backend = key; mount(message); paintBackend(); },
+    }, label)));
+    mount(fields, ...(backend === 's3' ? s3Fields() : webdavFields()));
+  };
+  paintBackend();
+
+  const connection = card('Sync folder',
+    backendPicker,
+    fields,
     el('div', { class: 'form-actions' }, testBtn, saveBtn, message));
 
   // --- updates ---
@@ -172,7 +244,7 @@ export async function renderSetup(view) {
   const throttled = status.throttled || 0;
   const pacing = card('Request pacing',
     el('p', { class: 'muted' },
-      'How hard the viewer is allowed to hit your WebDAV server. Hosted providers throttle: '
+      'How hard the viewer is allowed to hit your server. Hosted providers throttle: '
       + 'Yandex.Disk answers a burst of requests with 429 and drops them, which shows up as trips '
       + 'silently missing from the index. Throttled requests are retried with backoff, and the '
       + 'viewer slows itself down further whenever the server pushes back.'),

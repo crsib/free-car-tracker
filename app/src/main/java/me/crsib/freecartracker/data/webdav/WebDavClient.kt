@@ -11,14 +11,11 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
-import java.util.zip.GZIPInputStream
-import java.util.zip.GZIPOutputStream
 import javax.xml.parsers.DocumentBuilderFactory
 
-/** One child resource of a WebDAV collection, from a Depth:1 PROPFIND listing. */
+/** One child of a remote folder: a WebDAV Depth:1 PROPFIND entry, or an S3 key / common prefix. */
 data class DavEntry(
     /** Last decoded path segment, i.e. the file or directory name. */
     val name: String,
@@ -33,11 +30,7 @@ data class DavEntry(
  * sync layout needs: MKCOL (with parent creation), PROPFIND Depth:0/1, and gzip PUT/GET.
  */
 class WebDavClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .readTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .writeTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .build(),
+    private val client: OkHttpClient = defaultHttpClient(),
 ) {
     /**
      * Trip payloads are a different class of transfer from the small JSON documents: a 10 Hz
@@ -46,10 +39,7 @@ class WebDavClient(
      * Honor: whole trips still aborting with `SocketTimeoutException` at a 60s write timeout.
      * Shares the parent's connection pool and dispatcher, so this costs nothing but the config.
      */
-    private val largeTransferClient: OkHttpClient = client.newBuilder()
-        .readTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-        .writeTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-        .build()
+    private val largeTransferClient: OkHttpClient = largeTransfer(client)
 
     private val jsonMedia = "application/json".toMediaType()
     private val gzipMedia = "application/gzip".toMediaType()
@@ -228,15 +218,6 @@ class WebDavClient(
 
     // --- helpers ---
 
-    private fun gzip(data: ByteArray): ByteArray {
-        val out = ByteArrayOutputStream()
-        GZIPOutputStream(out).use { it.write(data) }
-        return out.toByteArray()
-    }
-
-    private fun gunzip(data: ByteArray): ByteArray =
-        GZIPInputStream(ByteArrayInputStream(data)).use { it.readBytes() }
-
     /**
      * Parse a `207 Multi-Status` body into child [DavEntry]s. Namespace-aware DOM matching on the
      * `DAV:` namespace, so it is robust to the prefix the server uses (`D:`/`d:`/`lp1:`). The
@@ -271,6 +252,19 @@ class WebDavClient(
     }.getOrNull()
 
     companion object {
+        /** The HTTP client for sync traffic. Shared with [S3Client], so both backends time out alike. */
+        fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(IO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .build()
+
+        /** [base] with the long per-operation timeouts the multi-MB trip files need. */
+        fun largeTransfer(base: OkHttpClient): OkHttpClient = base.newBuilder()
+            .readTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+            .writeTimeout(LARGE_TRANSFER_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+            .build()
+
         private const val CONNECT_TIMEOUT_SECONDS = 15L
 
         /**

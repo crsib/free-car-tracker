@@ -166,14 +166,14 @@ fun ObdConnectionScreen(onBack: () -> Unit) {
                             enabled = !state.diagSyncing,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (state.diagSyncing) "Syncing…" else "Sync diagnostic files to WebDAV", maxLines = 1, softWrap = false)
+                            Text(if (state.diagSyncing) "Syncing…" else "Sync diagnostic files to cloud", maxLines = 1, softWrap = false)
                         }
                         OutlinedButton(
                             onClick = vm::uploadDiagnosticsLog,
                             enabled = !state.logUploading,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(if (state.logUploading) "Uploading…" else "Upload diagnostics log to WebDAV", maxLines = 1, softWrap = false)
+                            Text(if (state.logUploading) "Uploading…" else "Upload diagnostics log to cloud", maxLines = 1, softWrap = false)
                         }
                     }
                     state.diagSyncStatus?.let {
@@ -238,7 +238,7 @@ private fun DidScanCard(
             Text(
                 "Discovers manufacturer data identifiers (UDS service 22) the standard PIDs don't " +
                     "expose — for mapping EV signals on cars like Li Auto. Finds live ECUs, then sweeps " +
-                    "for DIDs that return data and saves them to a CSV (also uploaded to WebDAV under the " +
+                    "for DIDs that return data and saves them to a CSV (also uploaded to cloud sync under the " +
                     "car's folder when configured). DIDs found unsupported are remembered per state, so " +
                     "re-scans skip them. Long; you can stop anytime, and it must run on its own.",
                 style = MaterialTheme.typography.bodySmall,
@@ -354,7 +354,7 @@ private fun DidWatchCard(
             Text("Live DID watch", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Poll a few DIDs continuously alongside speed & RPM, and log a synchronized CSV " +
-                    "(local + WebDAV) so you can match a DID's value against a known signal — the one " +
+                    "(local + cloud sync) so you can match a DID's value against a known signal — the one " +
                     "that tracks speed is your candidate. One DID per line as \"HEADER DID\" (e.g. " +
                     "7E8 2002). Pre-filled from the last scan.",
                 style = MaterialTheme.typography.bodySmall,

@@ -19,7 +19,7 @@ export async function renderDashboard(view) {
   const vehicle = selectedVehicle();
   if (!vehicle) {
     mount(view, el('div', { class: 'page' },
-      empty('No cars found in that WebDAV folder yet. Check Settings, then run a refresh.')));
+      empty('No cars found in that sync folder yet. Check Settings, then run a refresh.')));
     return null;
   }
 

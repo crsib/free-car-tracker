@@ -6,9 +6,9 @@
     <string name="telemetry_channel_name">Trip recording</string>
     <string name="telemetry_channel_desc">Ongoing notification while recording a trip</string>
     <string name="telemetry_recording_title">Recording trip</string>
-    <string name="webdav_sync_channel_name">WebDAV sync</string>
-    <string name="webdav_sync_channel_desc">Ongoing notification while syncing to your WebDAV server</string>
-    <string name="webdav_sync_title">Syncing to WebDAV</string>
+    <string name="webdav_sync_channel_name">Cloud sync</string>
+    <string name="webdav_sync_channel_desc">Ongoing notification while syncing to your WebDAV server or S3 bucket</string>
+    <string name="webdav_sync_title">Syncing</string>
     <string name="telemetry_recording_text">Collecting OBD &amp; GPS telemetry</string>
     <string name="telemetry_status_connecting">Connecting to adapter…</string>
     <string name="telemetry_status_reconnecting">Reconnecting…</string>

@@ -91,7 +91,7 @@ type Progress struct {
 // Index owns the catalog and the single background job that rebuilds it.
 type Index struct {
 	cache  *Cache
-	client *webdav.Client
+	client webdav.Backend
 
 	mu       sync.RWMutex
 	catalog  *Catalog
@@ -103,18 +103,18 @@ type Index struct {
 	concurrency int
 }
 
-func NewIndex(cache *Cache, client *webdav.Client) *Index {
+func NewIndex(cache *Cache, client webdav.Backend) *Index {
 	return &Index{cache: cache, client: client}
 }
 
-// SetClient swaps the WebDAV target, for when the user reconfigures the server at runtime.
-func (ix *Index) SetClient(c *webdav.Client) {
+// SetClient swaps the storage target, for when the user reconfigures the server at runtime.
+func (ix *Index) SetClient(c webdav.Backend) {
 	ix.mu.Lock()
 	ix.client = c
 	ix.mu.Unlock()
 }
 
-func (ix *Index) Client() *webdav.Client {
+func (ix *Index) Client() webdav.Backend {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return ix.client
@@ -263,7 +263,7 @@ func (ix *Index) SetConcurrency(n int) {
 func (ix *Index) build(ctx context.Context, full bool) (*Catalog, error) {
 	client := ix.Client()
 	if client == nil {
-		return nil, errors.New("webdav is not configured")
+		return nil, errors.New("storage is not configured")
 	}
 	cat := &Catalog{BuiltAt: time.Now()}
 	var warnMu sync.Mutex
@@ -388,7 +388,7 @@ func (ix *Index) build(ctx context.Context, full bool) (*Catalog, error) {
 // buckets are walked serially but the trip folders inside them run in parallel, which is
 // where the round-trips actually are.
 func (ix *Index) walkTrips(
-	ctx context.Context, client *webdav.Client, vehicleSyncID string,
+	ctx context.Context, client webdav.Backend, vehicleSyncID string,
 	deleted map[string]bool, full bool, warn func(string, ...any),
 ) ([]TripRecord, error) {
 	years, err := client.List(ctx, vehicleSyncID+"/"+TripsD+"/")
@@ -482,7 +482,7 @@ func (ix *Index) walkTrips(
 // alone carry no aggregates or identity. That now surfaces as a 404 rather than an absent
 // listing entry, which is the same conclusion for one fewer round trip.
 func (ix *Index) readTrip(
-	ctx context.Context, client *webdav.Client,
+	ctx context.Context, client webdav.Backend,
 	vehicleSyncID, dir, tripSyncID string, full bool, warn func(string, ...any),
 ) (TripRecord, bool) {
 	if full {

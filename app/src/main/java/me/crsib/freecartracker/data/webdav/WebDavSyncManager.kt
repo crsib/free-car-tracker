@@ -92,7 +92,7 @@ sealed interface SyncStatus {
 }
 
 /**
- * Incremental, multi-device WebDAV sync over the per-car/per-trip folder layout
+ * Incremental, multi-device sync to WebDAV or S3 ([RemoteStorage]) over the per-car/per-trip folder layout
  * ([WebDavPaths]). Per-car ledgers use last-write-wins guarded by an `exportedAt` clock
  * ([SyncStateStore]); finished trips are immutable and sync by "upload what's not there yet".
  *
@@ -105,6 +105,7 @@ class WebDavSyncManager(
     private val store: WebDavSettingsStore,
     private val syncState: SyncStateStore,
     private val client: WebDavClient,
+    private val s3: S3Client = S3Client(),
     private val db: AppDatabase,
     private val telemetryRepo: TelemetryRepository,
 ) {
@@ -132,7 +133,17 @@ class WebDavSyncManager(
 
     fun config(): WebDavConfig = store.load()
     fun saveConfig(config: WebDavConfig) = store.save(config)
-    suspend fun testConnection(config: WebDavConfig): Result<Unit> = client.testConnection(config)
+    suspend fun testConnection(config: WebDavConfig): Result<Unit> = storage(config).testConnection()
+
+    /** The configured sync target, WebDAV or S3. Every operation below goes through this. */
+    private fun storage(config: WebDavConfig): RemoteStorage = RemoteStorage.forConfig(config, client, s3)
+
+    /** The live target, or a failure naming the reason nothing can be synced. */
+    private fun configuredStorage(): RemoteStorage {
+        val config = store.load()
+        check(config.isConfigured) { "Sync storage not configured" }
+        return storage(config)
+    }
 
     /**
      * Upload one UDS DID-scan CSV. DIDs are vehicle-specific, so it lands under the car's folder
@@ -142,13 +153,12 @@ class WebDavSyncManager(
      */
     suspend fun uploadDidScan(vehicleSyncId: String?, name: String, csv: ByteArray): Result<String> =
         runCatching {
-            val config = store.load()
-            check(config.isConfigured) { "WebDAV not configured" }
+            val remote = configuredStorage()
             val dir = WebDavPaths.didScansDir(vehicleSyncId)
-            client.ensureCollection(config, dir).getOrThrow()
-            val remote = "$dir$name.gz"
-            client.putGzip(config, remote, csv).getOrThrow()
-            remote
+            remote.ensureCollection(dir).getOrThrow()
+            val path = "$dir$name.gz"
+            remote.putGzip(path, csv).getOrThrow()
+            path
         }
 
     /**
@@ -157,13 +167,12 @@ class WebDavSyncManager(
      */
     suspend fun uploadDidScanIfMissing(vehicleSyncId: String?, name: String, csv: ByteArray): Result<Boolean> =
         runCatching {
-            val config = store.load()
-            check(config.isConfigured) { "WebDAV not configured" }
+            val remote = configuredStorage()
             val dir = WebDavPaths.didScansDir(vehicleSyncId)
-            val remote = "$dir$name.gz"
-            if (client.exists(config, remote).getOrDefault(false)) return@runCatching false
-            client.ensureCollection(config, dir).getOrThrow()
-            client.putGzip(config, remote, csv).getOrThrow()
+            val path = "$dir$name.gz"
+            if (remote.exists(path).getOrDefault(false)) return@runCatching false
+            remote.ensureCollection(dir).getOrThrow()
+            remote.putGzip(path, csv).getOrThrow()
             true
         }
 
@@ -180,12 +189,12 @@ class WebDavSyncManager(
         step("Starting")
         ensuredCollections.clear()
         val result = runCatching {
-            val config = store.load()
-            check(config.isConfigured) { "WebDAV not configured" }
+            val remote = configuredStorage()
+            adoptTarget(store.load())
             val budget = Budget(budgetMillis)
             var report = SyncReport()
-            report = pushPhase(config, now, report, budget)
-            report = pullPhase(config, now, report, budget)
+            report = pushPhase(remote, now, report, budget)
+            report = pullPhase(remote, now, report, budget)
             store.setLastBackup(now)
             report
         }
@@ -194,6 +203,29 @@ class WebDavSyncManager(
             onFailure = { SyncStatus.Failed("${it::class.simpleName}: ${it.message}", now) },
         )
         result
+    }
+
+    /**
+     * Re-offer everything when the sync target is not the one the local upload marks refer to.
+     *
+     * A trip's `syncedAtMillis` and a tombstone's `remotePurged` mean "done on the server we were
+     * syncing with". After switching WebDAV → S3 (or to another folder) they are stale, and
+     * without this the new target only ever received trips recorded after the switch. Clearing
+     * them is safe: an upload first checks whether the trip is already there, so trips the new
+     * target does have cost one existence check each, not a re-upload. That includes trips this
+     * device pulled from others, so any one device can populate a new target on its own.
+     *
+     * Installs from before targets were recorded have no id yet. They get one full re-check, since
+     * there is no way to tell whether their marks belong to the current target — the price is one
+     * existence check per trip, once.
+     */
+    private suspend fun adoptTarget(config: WebDavConfig) {
+        val target = config.targetId
+        if (syncState.syncedTarget() == target) return
+        val trips = db.tripDao().clearSynced()
+        val tombstones = db.deletedTripDao().clearPurged()
+        DiagLog.i(TAG, "sync target is now $target: re-offering $trips trips and $tombstones deletions")
+        syncState.setSyncedTarget(target)
     }
 
     /**
@@ -215,7 +247,7 @@ class WebDavSyncManager(
 
     // --- push ---
 
-    private suspend fun pushPhase(config: WebDavConfig, now: Long, start: SyncReport, budget: Budget): SyncReport {
+    private suspend fun pushPhase(remote: RemoteStorage, now: Long, start: SyncReport, budget: Budget): SyncReport {
         var report = start
         val vehicles = db.vehicleDao().getAll()
         val byId = vehicles.associateBy { it.id }
@@ -223,7 +255,7 @@ class WebDavSyncManager(
         for (v in vehicles) {
             // Named rather than counted: people have one or two cars, so the name says more.
             step("Uploading ledger for ${v.name}")
-            report = runCatching { pushVehicleLedger(config, v, now) }.fold(
+            report = runCatching { pushVehicleLedger(remote, v, now) }.fold(
                 onSuccess = { pushed ->
                     if (pushed) report.copy(ledgersPushed = report.ledgersPushed + 1) else report
                 },
@@ -231,8 +263,8 @@ class WebDavSyncManager(
             )
         }
 
-        report = uploadTrips(config, byId, now, report, budget)
-        return pushTombstones(config, report)
+        report = uploadTrips(remote, byId, now, report, budget)
+        return pushTombstones(remote, report)
     }
 
     /**
@@ -249,7 +281,7 @@ class WebDavSyncManager(
      * gzipped copy in memory at once, and some servers lock a collection during concurrent writes.
      */
     private suspend fun uploadTrips(
-        config: WebDavConfig,
+        remote: RemoteStorage,
         byId: Map<Long, Vehicle>,
         now: Long,
         start: SyncReport,
@@ -267,7 +299,7 @@ class WebDavSyncManager(
                     // Re-check inside the permit: the budget may have run out while queued.
                     if (budget.exhausted()) return@withPermit Outcome.DEFERRED
                     val startedAt = System.nanoTime()
-                    runCatching { uploadTrip(config, vehicle, trip, now) }.fold(
+                    runCatching { uploadTrip(remote, vehicle, trip, now) }.fold(
                         onSuccess = { uploaded ->
                             if (uploaded) {
                                 db.tripDao().markSynced(trip.id, now)
@@ -304,9 +336,9 @@ class WebDavSyncManager(
      * the remote ledger is strictly newer than anything we have reconciled — [pullPhase] merges it
      * instead. For the sole ledger editor that never happens and we always push.
      */
-    private suspend fun pushVehicleLedger(config: WebDavConfig, v: Vehicle, now: Long): Boolean {
-        client.ensureCollection(config, WebDavPaths.vehicleDir(v.syncId), ensuredCollections).getOrThrow()
-        val remoteLedgerBytes = client.getBytes(config, WebDavPaths.ledgerJson(v.syncId)).getOrThrow()
+    private suspend fun pushVehicleLedger(remote: RemoteStorage, v: Vehicle, now: Long): Boolean {
+        remote.ensureCollection(WebDavPaths.vehicleDir(v.syncId), ensuredCollections).getOrThrow()
+        val remoteLedgerBytes = remote.getBytes(WebDavPaths.ledgerJson(v.syncId)).getOrThrow()
         val remoteDoc = remoteLedgerBytes?.let {
             runCatching { json.decodeFromString(LedgerDocument.serializer(), it.decodeToString()) }.getOrNull()
         }
@@ -314,13 +346,13 @@ class WebDavSyncManager(
         if (remoteClock > syncState.ledgerClock(v.syncId)) return false
 
         if (remoteLedgerBytes != null) {
-            client.putBytes(config, WebDavPaths.ledgerBak(v.syncId), remoteLedgerBytes).getOrThrow()
+            remote.putBytes(WebDavPaths.ledgerBak(v.syncId), remoteLedgerBytes).getOrThrow()
         }
         // Fold any remote-only entries into the local ledger before overwriting the remote
         // copy, so a push can never discard entries another device added concurrently.
         if (remoteDoc != null) importer.mergeLedger(remoteDoc)
-        pushVehicle(config, v, now)
-        pushLedger(config, v, now)
+        pushVehicle(remote, v, now)
+        pushLedger(remote, v, now)
         syncState.setLedgerClock(v.syncId, now)
         return true
     }
@@ -330,20 +362,18 @@ class WebDavSyncManager(
      * devices delete their copy) then remove the remote trip folder, and mark it purged. The
      * marker is written before the folder delete so a crash mid-purge still propagates the intent.
      */
-    private suspend fun pushTombstones(config: WebDavConfig, start: SyncReport): SyncReport {
+    private suspend fun pushTombstones(remote: RemoteStorage, start: SyncReport): SyncReport {
         var report = start
         val pending = db.deletedTripDao().getUnpurged()
         for ((i, tomb) in pending.withIndex()) {
             step("Removing deleted trips", done = i + 1, total = pending.size)
             report = runCatching {
-                client.ensureCollection(config, WebDavPaths.tombstonesDir(tomb.vehicleSyncId), ensuredCollections).getOrThrow()
-                client.putBytes(
-                    config,
+                remote.ensureCollection(WebDavPaths.tombstonesDir(tomb.vehicleSyncId), ensuredCollections).getOrThrow()
+                remote.putBytes(
                     WebDavPaths.tombstoneFile(tomb.vehicleSyncId, tomb.tripSyncId),
                     ByteArray(0),
                 ).getOrThrow()
-                client.delete(
-                    config,
+                remote.delete(
                     WebDavPaths.tripDir(tomb.vehicleSyncId, tomb.startedAtMillis, tomb.tripSyncId),
                 ).getOrThrow()
                 db.deletedTripDao().markPurged(tomb.tripSyncId)
@@ -355,16 +385,15 @@ class WebDavSyncManager(
         return report
     }
 
-    private suspend fun pushVehicle(config: WebDavConfig, v: Vehicle, now: Long) {
+    private suspend fun pushVehicle(remote: RemoteStorage, v: Vehicle, now: Long) {
         val doc = VehicleDocument(exportedAt = now, vehicle = v)
-        client.putBytes(
-            config,
+        remote.putBytes(
             WebDavPaths.vehicleJson(v.syncId),
             json.encodeToString(VehicleDocument.serializer(), doc).toByteArray(),
         ).getOrThrow()
     }
 
-    private suspend fun pushLedger(config: WebDavConfig, v: Vehicle, now: Long) {
+    private suspend fun pushLedger(remote: RemoteStorage, v: Vehicle, now: Long) {
         val doc = LedgerDocument(
             exportedAt = now,
             vehicleSyncId = v.syncId,
@@ -374,26 +403,25 @@ class WebDavSyncManager(
             deletedEntries = db.deletedLedgerEntryDao().getForVehicle(v.id)
                 .map { LedgerTombstone(it.syncId, it.deletedAtMillis) },
         )
-        client.putBytes(
-            config,
+        remote.putBytes(
             WebDavPaths.ledgerJson(v.syncId),
             json.encodeToString(LedgerDocument.serializer(), doc).toByteArray(),
         ).getOrThrow()
     }
 
     /** Upload one trip's folder; returns false if its data is gone. Idempotent (skips if present). */
-    private suspend fun uploadTrip(config: WebDavConfig, vehicle: Vehicle, trip: me.crsib.freecartracker.telemetry.data.entity.Trip, now: Long): Boolean {
+    private suspend fun uploadTrip(remote: RemoteStorage, vehicle: Vehicle, trip: me.crsib.freecartracker.telemetry.data.entity.Trip, now: Long): Boolean {
         val dir = WebDavPaths.tripDir(vehicle.syncId, trip.startedAtMillis, trip.syncId)
-        if (client.exists(config, dir + WebDavPaths.TRIP_JSON).getOrThrow()) return true
+        if (remote.exists(dir + WebDavPaths.TRIP_JSON).getOrThrow()) return true
         val data = telemetryRepo.getTripData(trip.id) ?: return false
-        val obdGz = client.gzipped(ObdCsvExporter.export(data.obdSamples, data.extendedSamples))
-        val gpxGz = client.gzipped(GpxExporter.export(trip, data.gpsPoints))
+        val obdGz = gzip(ObdCsvExporter.export(data.obdSamples, data.extendedSamples))
+        val gpxGz = gzip(GpxExporter.export(trip, data.gpsPoints))
         // A single 10 Hz trip can be tens of MB; showing the size is the difference between the UI
         // looking hung and it obviously being busy.
         detail(sizeLabel(obdGz.size + gpxGz.size))
-        client.ensureCollection(config, dir, ensuredCollections).getOrThrow()
-        client.putGzipped(config, dir + WebDavPaths.OBD_CSV_GZ, obdGz).getOrThrow()
-        client.putGzipped(config, dir + WebDavPaths.TRACK_GPX_GZ, gpxGz).getOrThrow()
+        remote.ensureCollection(dir, ensuredCollections).getOrThrow()
+        remote.putGzipped(dir + WebDavPaths.OBD_CSV_GZ, obdGz).getOrThrow()
+        remote.putGzipped(dir + WebDavPaths.TRACK_GPX_GZ, gpxGz).getOrThrow()
         val manifest = TripManifest(
             tripSyncId = trip.syncId,
             vehicleSyncId = vehicle.syncId,
@@ -407,28 +435,28 @@ class WebDavSyncManager(
             ),
         )
         // Manifest last: its presence means the folder is complete.
-        client.putBytes(config, dir + WebDavPaths.TRIP_JSON, json.encodeToString(TripManifest.serializer(), manifest).toByteArray()).getOrThrow()
+        remote.putBytes(dir + WebDavPaths.TRIP_JSON, json.encodeToString(TripManifest.serializer(), manifest).toByteArray()).getOrThrow()
         return true
     }
 
     // --- pull ---
 
-    private suspend fun pullPhase(config: WebDavConfig, now: Long, start: SyncReport, budget: Budget): SyncReport {
+    private suspend fun pullPhase(remote: RemoteStorage, now: Long, start: SyncReport, budget: Budget): SyncReport {
         var report = start
         step("Checking the server")
         // The root listing is the one thing a pull genuinely cannot proceed without, so let it throw.
-        val vehicleDirs = client.list(config, "").getOrThrow().filter { it.isCollection }
+        val vehicleDirs = remote.list("").getOrThrow().filter { it.isCollection }
         vehicleDirs.forEachIndexed { i, dir ->
             val vSync = dir.name
             step("Checking for new data", done = i + 1, total = vehicleDirs.size)
-            report = runCatching { pullVehicle(config, vSync, now, report, budget) }
+            report = runCatching { pullVehicle(remote, vSync, now, report, budget) }
                 .getOrElse { e -> report.failing("pull car $vSync", e) }
         }
         return report
     }
 
     private suspend fun pullVehicle(
-        config: WebDavConfig,
+        remote: RemoteStorage,
         vSync: String,
         now: Long,
         start: SyncReport,
@@ -436,9 +464,9 @@ class WebDavSyncManager(
     ): SyncReport {
         var report = start
         // Not a car folder (e.g. the top-level did-scans/) — nothing to pull.
-        val vehicleDoc = getJson(config, WebDavPaths.vehicleJson(vSync), VehicleDocument.serializer()) ?: return report
+        val vehicleDoc = getJson(remote, WebDavPaths.vehicleJson(vSync), VehicleDocument.serializer()) ?: return report
         val local = db.vehicleDao().findBySyncId(vSync)
-        val remoteLedger = getJson(config, WebDavPaths.ledgerJson(vSync), LedgerDocument.serializer())
+        val remoteLedger = getJson(remote, WebDavPaths.ledgerJson(vSync), LedgerDocument.serializer())
 
         if (local == null) {
             importer.importVehicle(vehicleDoc)
@@ -454,8 +482,8 @@ class WebDavSyncManager(
             report = report.copy(ledgersPulled = report.ledgersPulled + 1)
         }
 
-        report = applyRemoteTombstones(config, vSync, now, report)
-        return importNewTrips(config, vSync, now, report, budget)
+        report = applyRemoteTombstones(remote, vSync, now, report)
+        return importNewTrips(remote, vSync, now, report, budget)
     }
 
     /**
@@ -463,9 +491,9 @@ class WebDavSyncManager(
      * local trip if we still have it, and record a local tombstone (already purged) so [importNewTrips]
      * skips it even if the remote folder hasn't been removed yet.
      */
-    private suspend fun applyRemoteTombstones(config: WebDavConfig, vSync: String, now: Long, start: SyncReport): SyncReport {
+    private suspend fun applyRemoteTombstones(remote: RemoteStorage, vSync: String, now: Long, start: SyncReport): SyncReport {
         var report = start
-        val markers = client.list(config, WebDavPaths.tombstonesDir(vSync)).getOrThrow().filter { !it.isCollection }
+        val markers = remote.list(WebDavPaths.tombstonesDir(vSync)).getOrThrow().filter { !it.isCollection }
         for (marker in markers) {
             val tripSyncId = marker.name
             if (db.deletedTripDao().isTombstoned(tripSyncId)) continue
@@ -489,7 +517,7 @@ class WebDavSyncManager(
 
     /** Walk trips/YYYY/MM/{tripSyncId}/ and import any trip not already present locally. */
     private suspend fun importNewTrips(
-        config: WebDavConfig,
+        remote: RemoteStorage,
         vSync: String,
         now: Long,
         start: SyncReport,
@@ -497,11 +525,11 @@ class WebDavSyncManager(
     ): SyncReport {
         var report = start
         var attempted = 0
-        val years = client.list(config, WebDavPaths.tripsRoot(vSync)).getOrThrow().filter { it.isCollection }
+        val years = remote.list(WebDavPaths.tripsRoot(vSync)).getOrThrow().filter { it.isCollection }
         for (y in years) {
-            val months = client.list(config, "${WebDavPaths.tripsRoot(vSync)}${y.name}/").getOrThrow().filter { it.isCollection }
+            val months = remote.list("${WebDavPaths.tripsRoot(vSync)}${y.name}/").getOrThrow().filter { it.isCollection }
             for (m in months) {
-                val tripDirs = client.list(config, "${WebDavPaths.tripsRoot(vSync)}${y.name}/${m.name}/").getOrThrow().filter { it.isCollection }
+                val tripDirs = remote.list("${WebDavPaths.tripsRoot(vSync)}${y.name}/${m.name}/").getOrThrow().filter { it.isCollection }
                 for (t in tripDirs) {
                     if (db.tripDao().findBySyncId(t.name) != null) continue
                     if (db.deletedTripDao().isTombstoned(t.name)) continue
@@ -511,7 +539,7 @@ class WebDavSyncManager(
                     }
                     step("Downloading trips", done = ++attempted)
                     val base = "${WebDavPaths.tripsRoot(vSync)}${y.name}/${m.name}/${t.name}/"
-                    report = runCatching { importOneTrip(config, base, now) }.fold(
+                    report = runCatching { importOneTrip(remote, base, now) }.fold(
                         onSuccess = { imported ->
                             if (imported) report.copy(tripsImported = report.tripsImported + 1) else report
                         },
@@ -523,15 +551,15 @@ class WebDavSyncManager(
         return report
     }
 
-    private suspend fun importOneTrip(config: WebDavConfig, base: String, now: Long): Boolean {
-        val manifest = getJson(config, base + WebDavPaths.TRIP_JSON, TripManifest.serializer()) ?: return false
-        val obd = manifest.files.obdCsvGz?.let { client.getGunzip(config, base + it).getOrThrow() }
-        val gpx = manifest.files.gpxGz?.let { client.getGunzip(config, base + it).getOrThrow() }
+    private suspend fun importOneTrip(remote: RemoteStorage, base: String, now: Long): Boolean {
+        val manifest = getJson(remote, base + WebDavPaths.TRIP_JSON, TripManifest.serializer()) ?: return false
+        val obd = manifest.files.obdCsvGz?.let { remote.getGunzip(base + it).getOrThrow() }
+        val gpx = manifest.files.gpxGz?.let { remote.getGunzip(base + it).getOrThrow() }
         return importer.importTrip(manifest, obd, gpx, now)
     }
 
-    private suspend fun <T> getJson(config: WebDavConfig, relPath: String, serializer: kotlinx.serialization.KSerializer<T>): T? {
-        val bytes = client.getBytes(config, relPath).getOrThrow() ?: return null
+    private suspend fun <T> getJson(remote: RemoteStorage, relPath: String, serializer: kotlinx.serialization.KSerializer<T>): T? {
+        val bytes = remote.getBytes(relPath).getOrThrow() ?: return null
         return runCatching { json.decodeFromString(serializer, bytes.decodeToString()) }.getOrNull()
     }
 

@@ -204,9 +204,9 @@ fun SettingsScreen(
 
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("WebDAV sync", style = MaterialTheme.typography.titleMedium)
+                    Text("Cloud sync", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Automatically back up to your own WebDAV server (Nextcloud, ownCloud, …).",
+                        "Automatically back up to your own WebDAV server (Nextcloud, ownCloud, …) or S3 bucket.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Button(
@@ -218,7 +218,7 @@ fun SettingsScreen(
                     OutlinedButton(
                         onClick = onOpenWebDav,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    ) { Text("Configure WebDAV") }
+                    ) { Text("Configure sync") }
                 }
             }
         }

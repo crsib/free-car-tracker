@@ -406,8 +406,8 @@ class ObdConnectionViewModel(
 
         if (!webDav.config().isConfigured) return SavedScan(file.absolutePath, "")
         val note = webDav.uploadDidScan(resolveVehicleSyncId(), file.name, csv).fold(
-            onSuccess = { " · uploaded to WebDAV" },
-            onFailure = { e -> " · WebDAV upload failed: ${e.message ?: e.javaClass.simpleName}" },
+            onSuccess = { " · uploaded to cloud" },
+            onFailure = { e -> " · cloud upload failed: ${e.message ?: e.javaClass.simpleName}" },
         )
         return SavedScan(file.absolutePath, note)
     }
@@ -546,7 +546,7 @@ class ObdConnectionViewModel(
         _state.update { it.copy(diagSyncing = true, diagSyncStatus = "Syncing…") }
         viewModelScope.launch {
             val status = withContext(Dispatchers.IO) {
-                if (!webDav.config().isConfigured) return@withContext "WebDAV not configured."
+                if (!webDav.config().isConfigured) return@withContext "Cloud sync not configured."
                 val vehicleSyncId = resolveVehicleSyncId()
                 var uploaded = 0
                 var alreadyThere = 0
@@ -575,7 +575,7 @@ class ObdConnectionViewModel(
         _state.update { it.copy(logUploading = true, logUploadStatus = "Uploading…") }
         viewModelScope.launch {
             val status = withContext(Dispatchers.IO) {
-                if (!webDav.config().isConfigured) return@withContext "WebDAV not configured."
+                if (!webDav.config().isConfigured) return@withContext "Cloud sync not configured."
                 val files = File(appContext.filesDir, DiagnosticFiles.TELEMETRY_LOGS)
                     .listFiles { f -> f.isFile }.orEmpty().sortedBy { it.name }
                 if (files.isEmpty()) return@withContext "No diagnostics log yet."
@@ -589,7 +589,7 @@ class ObdConnectionViewModel(
                         onFailure = { failed++ },
                     )
                 }
-                if (failed == 0) "Uploaded diagnostics log ($uploaded file) to WebDAV."
+                if (failed == 0) "Uploaded diagnostics log ($uploaded file) to cloud sync."
                 else "Uploaded $uploaded; $failed failed (no connection?)."
             }
             _state.update { it.copy(logUploading = false, logUploadStatus = status) }
@@ -603,8 +603,8 @@ class ObdConnectionViewModel(
         file.writeBytes(csv)
         if (!webDav.config().isConfigured) return SavedScan(file.absolutePath, "")
         val note = webDav.uploadDidScan(resolveVehicleSyncId(), file.name, csv).fold(
-            onSuccess = { " · uploaded to WebDAV" },
-            onFailure = { e -> " · WebDAV upload failed: ${e.message ?: e.javaClass.simpleName}" },
+            onSuccess = { " · uploaded to cloud" },
+            onFailure = { e -> " · cloud upload failed: ${e.message ?: e.javaClass.simpleName}" },
         )
         return SavedScan(file.absolutePath, note)
     }

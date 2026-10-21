@@ -56,6 +56,22 @@ var ErrNotFound = errors.New("webdav: not found")
 // deliberately distinct from a generic failure: it means "slow down", not "this is missing".
 var ErrThrottled = errors.New("webdav: rate limited by the server")
 
+// Backend is the read side of a sync folder, whichever kind of server holds it. *Client is
+// the WebDAV one; package s3 provides the other. Paths are relative to the folder root and
+// a trailing slash names a directory, exactly as the Android app lays them out.
+type Backend interface {
+	// List returns a directory's immediate children. A missing directory lists as empty.
+	List(ctx context.Context, rel string) ([]Entry, error)
+	// Get fetches a file's bytes; a missing file wraps ErrNotFound.
+	Get(ctx context.Context, rel string) ([]byte, error)
+	// Ping verifies the location and credentials, with an error a person can act on.
+	Ping(ctx context.Context) error
+	// Limiter is the request pacer, exposed so throttling can be reported.
+	Limiter() *Limiter
+}
+
+var _ Backend = (*Client)(nil)
+
 type Client struct {
 	http    *http.Client
 	cfg     Config
@@ -131,32 +147,42 @@ const defaultUserAgent = "fct-viewer/1.0 (+https://github.com/crsib/free-car-tra
 //
 // build must produce a fresh request each attempt: a retried request needs an unconsumed body.
 func (c *Client) do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
-	attempts := c.cfg.MaxRetries + 1
+	return Send(ctx, c.http, c.limiter, c.cfg.MaxRetries, build)
+}
+
+// Send is the paced, throttle-aware request loop behind every Backend: it waits on limiter,
+// sends, and retries a 429 or 503 up to maxRetries times, honouring Retry-After. Exported so
+// the S3 backend gets the same treatment of a provider that pushes back.
+func Send(
+	ctx context.Context, hc *http.Client, limiter *Limiter, maxRetries int,
+	build func() (*http.Request, error),
+) (*http.Response, error) {
+	attempts := maxRetries + 1
 	if attempts < 1 {
 		attempts = 1
 	}
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		if err := c.limiter.Wait(ctx); err != nil {
+		if err := limiter.Wait(ctx); err != nil {
 			return nil, err
 		}
 		req, err := build()
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.http.Do(req)
+		resp, err := hc.Do(req)
 		if err != nil {
 			// Transport errors are not throttling; retrying them here would mask a genuinely
 			// unreachable server behind a long delay.
 			return nil, err
 		}
 		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
-			c.limiter.Succeeded()
+			limiter.Succeeded()
 			return resp, nil
 		}
 
 		wait, stated := retryAfter(resp)
-		c.limiter.Throttled(wait)
+		limiter.Throttled(wait)
 		lastErr = fmt.Errorf("%s %s -> %s", req.Method, req.URL.Path, resp.Status)
 		// Drain and close so the connection can be reused for the retry.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))

@@ -16,5 +16,16 @@ class SyncStateStore(context: Context, prefsName: String = "webdav_sync_state") 
         prefs.edit().putLong(key(vehicleSyncId), exportedAt).apply()
     }
 
+    /** [WebDavConfig.targetId] of the folder the trip upload marks refer to, or null if never recorded. */
+    fun syncedTarget(): String? = prefs.getString(KEY_TARGET, null)
+
+    fun setSyncedTarget(targetId: String) {
+        prefs.edit().putString(KEY_TARGET, targetId).apply()
+    }
+
     private fun key(vehicleSyncId: String) = "ledger_clock_$vehicleSyncId"
+
+    private companion object {
+        const val KEY_TARGET = "synced_target"
+    }
 }

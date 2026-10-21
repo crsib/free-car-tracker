@@ -21,4 +21,8 @@ interface DeletedTripDao {
 
     @Query("UPDATE deleted_trips SET remotePurged = 1 WHERE tripSyncId = :tripSyncId")
     suspend fun markPurged(tripSyncId: String)
+
+    /** Re-queue every tombstone for a new sync target, which has never seen these deletions. */
+    @Query("UPDATE deleted_trips SET remotePurged = 0 WHERE remotePurged = 1")
+    suspend fun clearPurged(): Int
 }

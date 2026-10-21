@@ -1,7 +1,7 @@
 # Car Tracker viewer
 
-A read-only web/desktop client for the data the Android app syncs to WebDAV. One
-self-contained binary: it does the WebDAV talking, caches what it downloads, and serves a
+A read-only web/desktop client for the data the Android app syncs to WebDAV or an S3 bucket.
+One self-contained binary: it does the storage talking, caches what it downloads, and serves a
 browser UI on `localhost`.
 
 - **Dashboard** — the phone's home screen with room to breathe: full-tank economy, kWh/100 km,
@@ -16,8 +16,8 @@ browser UI on `localhost`.
 - **Raw data** — download any trip's GPX, OBD CSV or `trip.json` individually, or a filtered zip
   of the lot. `.gz` files are decompressed by default so they open directly in other tools.
 
-It **never writes to the WebDAV server** — only `GET` and `PROPFIND`, so pointing it at a live
-sync folder cannot damage it. There is a unit test asserting exactly that.
+It **never writes to the server** — only `GET` and `PROPFIND` on WebDAV, only list and get on
+S3 — so pointing it at a live sync folder cannot damage it. There is a unit test asserting exactly that.
 
 ## Why a local server and not a static page
 
@@ -52,6 +52,17 @@ https://cloud.example.com/remote.php/dav/files/USERNAME/CarTracker/
 Use a dedicated **app password** (Settings → Security → Create new app password), not your
 account password.
 
+### S3 instead of WebDAV
+
+Pick **S3** in Settings (or pass `-backend s3`) to read a bucket the app syncs to — AWS or any
+S3-compatible store: MinIO, Cloudflare R2, Backblaze B2, Yandex Object Storage. Enter the same
+endpoint, region, bucket and folder as on the phone. Leave the endpoint empty for AWS; R2 wants
+region `auto`. Requests are path-style (`host/bucket/key`) unless you tick virtual-hosted.
+Give the viewer its own key limited to `s3:ListBucket` and `s3:GetObject` on that bucket.
+
+Requests are signed with AWS Signature V4 in-tree (no SDK), and go through the same pacing and
+429/503 retry as WebDAV.
+
 ### Flags
 
 | Flag | Default | Purpose |
@@ -63,6 +74,8 @@ account password.
 | `-cache` | OS cache dir | Where downloaded trip payloads live. |
 | `-cache-max` | unlimited | Cap the payload cache (`6GB`, `800MB`); evicts least-recently-used. |
 | `-url`, `-user`, `-password` | from config | Override the saved server for one run. |
+| `-backend` | `webdav` | `webdav` or `s3`. |
+| `-s3-endpoint`, `-s3-region`, `-s3-bucket`, `-s3-prefix`, `-s3-access-key` | from config | Override the saved bucket for one run. The secret comes from `FCT_S3_SECRET_KEY` or the config. |
 | `-insecure` | `false` | Skip TLS verification (self-signed home servers only). |
 | `-open` | `true` | Open a browser on start, for loopback listeners. |
 | `-refresh` | `true` | Re-read the WebDAV folder on start. |
@@ -72,8 +85,9 @@ account password.
 | `-webdav-concurrency` | `2` | WebDAV requests in flight at once. |
 
 `FCT_WEBDAV_URL`, `FCT_WEBDAV_USERNAME`, `FCT_WEBDAV_PASSWORD`, `FCT_CACHE_DIR`,
-`FCT_WEBDAV_INSECURE` and `FCT_AUTO_REFRESH_MINUTES` work too, which is the sane way to
-configure it in a container.
+`FCT_WEBDAV_INSECURE` and `FCT_AUTO_REFRESH_MINUTES` work too, as do `FCT_BACKEND`,
+`FCT_S3_ENDPOINT`, `FCT_S3_REGION`, `FCT_S3_BUCKET`, `FCT_S3_PREFIX`, `FCT_S3_ACCESS_KEY`,
+`FCT_S3_SECRET_KEY` and `FCT_S3_VIRTUAL_HOST=1` — the sane way to configure it in a container.
 
 ### Staying up to date
 
@@ -245,7 +259,9 @@ cd viewer && go test ./...
 
 They cover the full-tank economy method, energy-cost shares, recurrence expansion, the OBD CSV
 parser (including blanks-as-gaps and spike-preserving decimation), the GPX parser and its
-namespaced extensions, the WebDAV multistatus parser against a Nextcloud-shaped response, and
+namespaced extensions, the WebDAV multistatus parser against a Nextcloud-shaped response, the
+S3 signer against AWS's published SigV4 example plus listing/pagination against a fake bucket
+that verifies every signature, and
 the index walk with tombstones and half-finished uploads, the peer-IP allowlist (including that
 it ignores forged `X-Forwarded-For`), LRU cache eviction (including that it never sheds summaries
 or the catalog), rate limiting and `Retry-After` handling, and that a throttled server costs no
@@ -256,7 +272,9 @@ trips and the walk never lists a trip folder.
 ```
 viewer/
   main.go                 flags, embedded UI, graceful shutdown
-  internal/webdav/        read-only WebDAV client (PROPFIND + GET)
+  internal/webdav/        read-only WebDAV client (PROPFIND + GET), the Backend interface,
+                          request pacing and 429 retry
+  internal/s3/            read-only S3 client (ListObjectsV2 + GetObject, SigV4)
   internal/model/         Go mirrors of the sync JSON documents
   internal/domain/        port of the app's pure calculators
   internal/series/        obd.csv and track.gpx parsing, decimation

@@ -232,7 +232,7 @@ func (c *Cache) Cached(rel string) ([]byte, bool) {
 
 // Fetch returns a resource, downloading it only if the cache is empty or stale. entry is the
 // PROPFIND record for the resource; pass the zero value when it is unknown.
-func (c *Cache) Fetch(ctx context.Context, client *webdav.Client, rel string, entry webdav.Entry) ([]byte, error) {
+func (c *Cache) Fetch(ctx context.Context, client webdav.Backend, rel string, entry webdav.Entry) ([]byte, error) {
 	// Collapse concurrent fetches of the same path.
 	c.mu.Lock()
 	if wg, ok := c.inflight[rel]; ok {

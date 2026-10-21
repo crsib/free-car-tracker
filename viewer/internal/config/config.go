@@ -1,4 +1,5 @@
-// Package config resolves where the viewer looks for its WebDAV server and its cache.
+// Package config resolves where the viewer looks for its sync folder (a WebDAV server or an
+// S3 bucket) and its cache.
 // Precedence is flags > environment > config file, so a one-off run can point at a second
 // server without disturbing the saved setup.
 package config
@@ -19,6 +20,13 @@ import (
 // Settings > Security > Create new app password), never your account password, so revoking
 // it costs nothing.
 type Config struct {
+	// Backend selects where the sync folder lives: BackendWebDAV (the default, and what a
+	// config written before S3 support means) or BackendS3.
+	Backend string `json:"backend,omitempty"`
+	// S3 is the bucket, used when Backend is BackendS3. The secret key is stored like the
+	// WebDAV password: give the viewer a read-only key scoped to this one bucket.
+	S3 S3 `json:"s3,omitempty"`
+
 	URL      string `json:"url"`
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -40,6 +48,48 @@ type Config struct {
 	// I press Refresh" - and has to be distinguishable from a config written before this
 	// setting existed, which should get the default.
 	AutoRefreshMinutes *int `json:"autoRefreshMinutes,omitempty"`
+}
+
+// S3 is an S3 or S3-compatible bucket holding the sync layout under Prefix.
+type S3 struct {
+	// Endpoint is the service URL; empty means AWS for Region.
+	Endpoint  string `json:"endpoint,omitempty"`
+	Region    string `json:"region,omitempty"`
+	Bucket    string `json:"bucket,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+	AccessKey string `json:"accessKey,omitempty"`
+	SecretKey string `json:"secretKey,omitempty"`
+	// VirtualHost addresses bucket.host instead of host/bucket. Off by default: path style
+	// works everywhere and needs no wildcard DNS.
+	VirtualHost bool `json:"virtualHost,omitempty"`
+}
+
+const (
+	BackendWebDAV = "webdav"
+	BackendS3     = "s3"
+)
+
+// EffectiveBackend is Backend, defaulting to WebDAV.
+func (c Config) EffectiveBackend() string {
+	if strings.EqualFold(strings.TrimSpace(c.Backend), BackendS3) {
+		return BackendS3
+	}
+	return BackendWebDAV
+}
+
+// Location names the configured folder for logs and messages.
+func (c Config) Location() string {
+	if c.EffectiveBackend() == BackendS3 {
+		loc := "s3://" + c.S3.Bucket
+		if p := strings.Trim(c.S3.Prefix, "/"); p != "" {
+			loc += "/" + p
+		}
+		if c.S3.Endpoint != "" {
+			loc += " at " + c.S3.Endpoint
+		}
+		return loc
+	}
+	return c.URL
 }
 
 // Conservative defaults, chosen for a hosted provider rather than a home server: it is far
@@ -103,6 +153,10 @@ func (c *Config) SetAutoRefreshMinutes(n int) {
 }
 
 func (c Config) Configured() bool {
+	if c.EffectiveBackend() == BackendS3 {
+		return strings.TrimSpace(c.S3.Bucket) != "" &&
+			strings.TrimSpace(c.S3.AccessKey) != "" && c.S3.SecretKey != ""
+	}
 	return strings.TrimSpace(c.URL) != "" && strings.TrimSpace(c.Username) != ""
 }
 
@@ -169,7 +223,7 @@ func Save(path string, c Config) error {
 	return nil
 }
 
-// ApplyEnv overlays FCT_WEBDAV_* environment variables onto a config. Useful for Docker,
+// ApplyEnv overlays FCT_WEBDAV_* / FCT_S3_* environment variables onto a config. Useful for Docker,
 // where baking credentials into an image or a bind-mounted file is worse than an env var
 // supplied by the orchestrator.
 func ApplyEnv(c Config) Config {
@@ -181,6 +235,24 @@ func ApplyEnv(c Config) Config {
 	}
 	if v := os.Getenv("FCT_WEBDAV_PASSWORD"); v != "" {
 		c.Password = v
+	}
+	if v := os.Getenv("FCT_BACKEND"); v != "" {
+		c.Backend = strings.ToLower(strings.TrimSpace(v))
+	}
+	for env, dst := range map[string]*string{
+		"FCT_S3_ENDPOINT":   &c.S3.Endpoint,
+		"FCT_S3_REGION":     &c.S3.Region,
+		"FCT_S3_BUCKET":     &c.S3.Bucket,
+		"FCT_S3_PREFIX":     &c.S3.Prefix,
+		"FCT_S3_ACCESS_KEY": &c.S3.AccessKey,
+		"FCT_S3_SECRET_KEY": &c.S3.SecretKey,
+	} {
+		if v := os.Getenv(env); v != "" {
+			*dst = v
+		}
+	}
+	if os.Getenv("FCT_S3_VIRTUAL_HOST") == "1" {
+		c.S3.VirtualHost = true
 	}
 	if v := os.Getenv("FCT_CACHE_DIR"); v != "" {
 		c.CacheDir = v
@@ -204,10 +276,20 @@ func (c Config) ResolveCacheDir() string {
 	return DefaultCacheDir()
 }
 
-// Redacted is the config as the UI may see it: everything except the password, which never
-// leaves the process once saved.
+// Redacted is the config as the UI may see it: everything except the password and the S3
+// secret key, which never leave the process once saved.
 func (c Config) Redacted() map[string]any {
 	return map[string]any{
+		"backend": c.EffectiveBackend(),
+		"s3": map[string]any{
+			"endpoint":    c.S3.Endpoint,
+			"region":      c.S3.Region,
+			"bucket":      c.S3.Bucket,
+			"prefix":      c.S3.Prefix,
+			"accessKey":   c.S3.AccessKey,
+			"virtualHost": c.S3.VirtualHost,
+			"hasSecret":   c.S3.SecretKey != "",
+		},
 		"url":         c.URL,
 		"username":    c.Username,
 		"insecure":    c.Insecure,

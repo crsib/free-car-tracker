@@ -1,4 +1,5 @@
-// Command fct-viewer serves a read-only web UI over a Car Tracker WebDAV sync folder.
+// Command fct-viewer serves a read-only web UI over a Car Tracker sync folder, on a WebDAV
+// server or in an S3 bucket.
 //
 // The browser cannot talk to WebDAV directly - PROPFIND triggers a CORS preflight that
 // Nextcloud and friends do not answer - so this process does the WebDAV half server-side,
@@ -31,7 +32,6 @@ import (
 	"crsib.me/fct-viewer/internal/api"
 	"crsib.me/fct-viewer/internal/config"
 	"crsib.me/fct-viewer/internal/store"
-	"crsib.me/fct-viewer/internal/webdav"
 )
 
 //go:embed all:web
@@ -60,6 +60,12 @@ func main() {
 		url       = flag.String("url", "", "WebDAV directory URL (overrides the config file)")
 		user      = flag.String("user", "", "WebDAV username (overrides the config file)")
 		password  = flag.String("password", "", "WebDAV password; prefer FCT_WEBDAV_PASSWORD or the saved config")
+		backend   = flag.String("backend", "", "where the sync folder lives: webdav (default) or s3")
+		s3End     = flag.String("s3-endpoint", "", "S3 endpoint URL (default: AWS for -s3-region)")
+		s3Region  = flag.String("s3-region", "", "S3 signing region (default us-east-1; R2 uses auto)")
+		s3Bucket  = flag.String("s3-bucket", "", "S3 bucket")
+		s3Prefix  = flag.String("s3-prefix", "", "folder inside the bucket that holds the sync layout")
+		s3Key     = flag.String("s3-access-key", "", "S3 access key ID; prefer FCT_S3_SECRET_KEY or the saved config for the secret")
 		insecure  = flag.Bool("insecure", false, "skip TLS verification (self-signed certificates only)")
 		auth      = flag.String("auth", "", "require HTTP Basic auth as user:pass (use when not bound to localhost)")
 		allowFrom = flag.String("allow-from", "", "comma-separated IPs/CIDRs allowed to connect; empty allows everyone")
@@ -98,6 +104,20 @@ func main() {
 	if *cacheDir != "" {
 		cfg.CacheDir = *cacheDir
 	}
+	if *backend != "" {
+		cfg.Backend = strings.ToLower(*backend)
+	}
+	for _, o := range []struct {
+		flag string
+		dst  *string
+	}{
+		{*s3End, &cfg.S3.Endpoint}, {*s3Region, &cfg.S3.Region}, {*s3Bucket, &cfg.S3.Bucket},
+		{*s3Prefix, &cfg.S3.Prefix}, {*s3Key, &cfg.S3.AccessKey},
+	} {
+		if o.flag != "" {
+			*o.dst = o.flag
+		}
+	}
 	if *insecure {
 		cfg.Insecure = true
 	}
@@ -123,12 +143,7 @@ func main() {
 		log.Fatalf("cache: %v", err)
 	}
 
-	var client *webdav.Client
-	if cfg.Configured() {
-		client = webdav.New(api.ClientConfig(cfg), api.Transport(cfg.Insecure))
-	}
-
-	index := store.NewIndex(cache, client)
+	index := store.NewIndex(cache, api.NewBackend(cfg))
 	index.SetConcurrency(cfg.EffectiveConcurrency())
 	// Show the last known catalog immediately; the refresh below then updates it in place,
 	// so starting the viewer offline still gives you every trip you have already seen.
@@ -183,12 +198,12 @@ func main() {
 
 	shown := displayURL(ln.Addr().String(), *addr)
 	if cfg.Configured() {
-		log.Printf("Car Tracker viewer on %s  (WebDAV %s)", shown, cfg.URL)
+		log.Printf("Car Tracker viewer on %s  (%s)", shown, cfg.Location())
 		if *refresh {
 			index.Refresh()
 		}
 	} else {
-		log.Printf("Car Tracker viewer on %s  (not configured yet - set up your WebDAV server in the UI)", shown)
+		log.Printf("Car Tracker viewer on %s  (not configured yet - set up your WebDAV server or S3 bucket in the UI)", shown)
 	}
 	if maxBytes > 0 {
 		log.Printf("cache: %s (capped at %s, least-recently-used evicted)", cfg.ResolveCacheDir(), *cacheMax)
@@ -198,7 +213,7 @@ func main() {
 	if allow != nil {
 		log.Printf("allowing connections from: %s", allow)
 	}
-	log.Printf("webdav pacing: %.3g req/s, %d retries on 429, %d in flight",
+	log.Printf("request pacing: %.3g req/s, %d retries on 429, %d in flight",
 		cfg.EffectiveRPS(), cfg.EffectiveRetries(), cfg.EffectiveConcurrency())
 	if n := cfg.EffectiveAutoRefreshMinutes(); n > 0 {
 		log.Printf("auto-refresh: every %d min while the UI is open", n)

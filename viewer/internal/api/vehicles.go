@@ -11,6 +11,7 @@ import (
 	"crsib.me/fct-viewer/internal/config"
 	"crsib.me/fct-viewer/internal/domain"
 	"crsib.me/fct-viewer/internal/model"
+	"crsib.me/fct-viewer/internal/s3"
 	"crsib.me/fct-viewer/internal/store"
 	"crsib.me/fct-viewer/internal/webdav"
 )
@@ -28,7 +29,30 @@ func ClientConfig(cfg config.Config) webdav.Config {
 	}
 }
 
-// Transport builds the HTTP transport for a WebDAV connection. Insecure is opt-in and only
+// NewBackend builds the client for whichever backend cfg selects, or nil when it is not
+// configured. It returns the interface so "not configured" is a true nil, never a nil
+// *webdav.Client hiding inside a non-nil interface.
+func NewBackend(cfg config.Config) webdav.Backend {
+	if !cfg.Configured() {
+		return nil
+	}
+	if cfg.EffectiveBackend() == config.BackendS3 {
+		return s3.New(s3.Config{
+			Endpoint:          cfg.S3.Endpoint,
+			Region:            cfg.S3.Region,
+			Bucket:            cfg.S3.Bucket,
+			Prefix:            cfg.S3.Prefix,
+			AccessKey:         cfg.S3.AccessKey,
+			SecretKey:         cfg.S3.SecretKey,
+			VirtualHost:       cfg.S3.VirtualHost,
+			RequestsPerSecond: cfg.EffectiveRPS(),
+			MaxRetries:        cfg.EffectiveRetries(),
+		}, Transport(cfg.Insecure))
+	}
+	return webdav.New(ClientConfig(cfg), Transport(cfg.Insecure))
+}
+
+// Transport builds the HTTP transport for a WebDAV or S3 connection. Insecure is opt-in and only
 // exists for a home server with a self-signed certificate; it is never the default. Exported
 // so main builds the same client the setup endpoint does.
 func Transport(insecure bool) http.RoundTripper {

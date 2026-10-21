@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** Persists WebDAV credentials in an encrypted SharedPreferences file. */
+/** Persists the sync target and its credentials (WebDAV or S3) in an encrypted SharedPreferences file. */
 class WebDavSettingsStore(context: Context) {
 
     private val prefs: SharedPreferences by lazy {
@@ -27,6 +27,19 @@ class WebDavSettingsStore(context: Context) {
         password = prefs.getString(KEY_PASS, "").orEmpty(),
         autoBackup = prefs.getBoolean(KEY_AUTO, false),
         lastBackupMillis = prefs.getLong(KEY_LAST, 0),
+        // Absent on installs that predate S3 support, which were all WebDAV.
+        backend = prefs.getString(KEY_BACKEND, null)
+            ?.let { runCatching { SyncBackend.valueOf(it) }.getOrNull() }
+            ?: SyncBackend.WEBDAV,
+        s3 = S3Config(
+            endpoint = prefs.getString(KEY_S3_ENDPOINT, "").orEmpty(),
+            region = prefs.getString(KEY_S3_REGION, S3Config.DEFAULT_REGION).orEmpty(),
+            bucket = prefs.getString(KEY_S3_BUCKET, "").orEmpty(),
+            prefix = prefs.getString(KEY_S3_PREFIX, "").orEmpty(),
+            accessKeyId = prefs.getString(KEY_S3_ACCESS_KEY, "").orEmpty(),
+            secretAccessKey = prefs.getString(KEY_S3_SECRET_KEY, "").orEmpty(),
+            pathStyle = prefs.getBoolean(KEY_S3_PATH_STYLE, true),
+        ),
     )
 
     fun save(config: WebDavConfig) {
@@ -36,6 +49,14 @@ class WebDavSettingsStore(context: Context) {
             .putString(KEY_PASS, config.password)
             .putBoolean(KEY_AUTO, config.autoBackup)
             .putLong(KEY_LAST, config.lastBackupMillis)
+            .putString(KEY_BACKEND, config.backend.name)
+            .putString(KEY_S3_ENDPOINT, config.s3.endpoint.trim())
+            .putString(KEY_S3_REGION, config.s3.region.trim())
+            .putString(KEY_S3_BUCKET, config.s3.bucket.trim())
+            .putString(KEY_S3_PREFIX, config.s3.prefix.trim().trim('/'))
+            .putString(KEY_S3_ACCESS_KEY, config.s3.accessKeyId.trim())
+            .putString(KEY_S3_SECRET_KEY, config.s3.secretAccessKey.trim())
+            .putBoolean(KEY_S3_PATH_STYLE, config.s3.pathStyle)
             .apply()
     }
 
@@ -49,5 +70,13 @@ class WebDavSettingsStore(context: Context) {
         const val KEY_PASS = "password"
         const val KEY_AUTO = "auto_backup"
         const val KEY_LAST = "last_backup"
+        const val KEY_BACKEND = "backend"
+        const val KEY_S3_ENDPOINT = "s3_endpoint"
+        const val KEY_S3_REGION = "s3_region"
+        const val KEY_S3_BUCKET = "s3_bucket"
+        const val KEY_S3_PREFIX = "s3_prefix"
+        const val KEY_S3_ACCESS_KEY = "s3_access_key"
+        const val KEY_S3_SECRET_KEY = "s3_secret_key"
+        const val KEY_S3_PATH_STYLE = "s3_path_style"
     }
 }

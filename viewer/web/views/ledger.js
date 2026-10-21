@@ -164,7 +164,7 @@ export async function renderLedger(view) {
     rows.length
       ? el('div', { class: 'table-wrap tall' },
         el('table', { class: 'table table-sm sticky' }, el('thead', {}, head), tbody))
-      : card(null, empty('No ledger entries in this WebDAV folder.'))));
+      : card(null, empty('No ledger entries in this sync folder.'))));
 
   draw();
   return null;

@@ -161,7 +161,7 @@ function renderHeaderStatus() {
       throttled
         ? el('span', {
           class: 'sync-throttle',
-          title: `The WebDAV server asked us to slow down ${throttled} time(s). `
+          title: `The server asked us to slow down ${throttled} time(s). `
             + 'Requests are being paced automatically; lower the rate in Settings if it persists.',
         }, `throttled ×${throttled}`)
         : null,
@@ -175,7 +175,7 @@ function renderHeaderStatus() {
         : null,
       el('button', {
         class: 'btn btn-sm',
-        title: 'Re-read the WebDAV folder now',
+        title: 'Re-read the sync folder now',
         onclick: async () => {
           try { await api.refresh(); refreshStatus(); } catch (e) { alert(e.message); }
         },
@@ -184,7 +184,7 @@ function renderHeaderStatus() {
 
 /** What the auto chip says when you hover it - including why it might be doing nothing. */
 function autoTitle(auto) {
-  const lines = [`The viewer re-reads the WebDAV folder every ${fmt.interval(auto.minutes)} on its own.`, ''];
+  const lines = [`The viewer re-reads the sync folder every ${fmt.interval(auto.minutes)} on its own.`, ''];
   if (auto.idle) {
     // Idle means the server saw no requests for a while, so it stopped walking for nobody.
     // This page just made it non-idle again; saying so beats showing an overdue countdown.

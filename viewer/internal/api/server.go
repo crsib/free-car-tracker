@@ -1,5 +1,5 @@
 // Package api serves the JSON endpoints the browser UI reads, plus the raw-file downloads.
-// Everything here is read-only with respect to the WebDAV server: the viewer never issues a
+// Everything here is read-only with respect to the WebDAV server or S3 bucket: the viewer never issues a
 // PUT, MKCOL or DELETE, so pointing it at a live sync folder cannot damage it.
 package api
 
@@ -274,6 +274,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 type setupRequest struct {
+	// Backend is "webdav" or "s3"; empty keeps the saved choice.
+	Backend string    `json:"backend"`
+	S3      s3Request `json:"s3"`
+
 	URL      string `json:"url"`
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -285,16 +289,43 @@ type setupRequest struct {
 	Concurrency       int     `json:"concurrency"`
 }
 
-// merged applies a setup request onto the current config. An empty password means "keep the
-// saved one", so re-saving the URL does not force the user to retype their app password.
+type s3Request struct {
+	Endpoint    string `json:"endpoint"`
+	Region      string `json:"region"`
+	Bucket      string `json:"bucket"`
+	Prefix      string `json:"prefix"`
+	AccessKey   string `json:"accessKey"`
+	SecretKey   string `json:"secretKey"`
+	VirtualHost bool   `json:"virtualHost"`
+}
+
+// merged applies a setup request onto the current config. An empty password or secret key
+// means "keep the saved one", so re-saving the URL does not force the user to retype it.
+// Only the selected backend's fields are taken from the request; the other's stay as saved,
+// so trying S3 and switching back does not lose the WebDAV setup.
 func (s *Server) merged(req setupRequest) config.Config {
 	cfg := s.Config()
-	cfg.URL = strings.TrimSpace(req.URL)
-	cfg.Username = strings.TrimSpace(req.Username)
-	cfg.Insecure = req.Insecure
-	if req.Password != "" {
-		cfg.Password = req.Password
+	if b := strings.ToLower(strings.TrimSpace(req.Backend)); b != "" {
+		cfg.Backend = b
 	}
+	if cfg.EffectiveBackend() == config.BackendS3 {
+		cfg.S3.Endpoint = strings.TrimSpace(req.S3.Endpoint)
+		cfg.S3.Region = strings.TrimSpace(req.S3.Region)
+		cfg.S3.Bucket = strings.TrimSpace(req.S3.Bucket)
+		cfg.S3.Prefix = strings.Trim(strings.TrimSpace(req.S3.Prefix), "/")
+		cfg.S3.AccessKey = strings.TrimSpace(req.S3.AccessKey)
+		cfg.S3.VirtualHost = req.S3.VirtualHost
+		if req.S3.SecretKey != "" {
+			cfg.S3.SecretKey = strings.TrimSpace(req.S3.SecretKey)
+		}
+	} else {
+		cfg.URL = strings.TrimSpace(req.URL)
+		cfg.Username = strings.TrimSpace(req.Username)
+		if req.Password != "" {
+			cfg.Password = req.Password
+		}
+	}
+	cfg.Insecure = req.Insecure
 	if req.RequestsPerSecond > 0 {
 		cfg.RequestsPerSecond = req.RequestsPerSecond
 	}
@@ -307,20 +338,31 @@ func (s *Server) merged(req setupRequest) config.Config {
 	return cfg
 }
 
+// backendFor builds the client for a setup request's config, answering 400 when the form is
+// missing what that backend needs.
+func backendFor(w http.ResponseWriter, cfg config.Config) (webdav.Backend, bool) {
+	client := NewBackend(cfg)
+	if client != nil {
+		return client, true
+	}
+	if cfg.EffectiveBackend() == config.BackendS3 {
+		writeErr(w, http.StatusBadRequest, "bucket, access key and secret key are required")
+	} else {
+		writeErr(w, http.StatusBadRequest, "url and username are required")
+	}
+	return nil, false
+}
+
 func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 	var req setupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request body")
 		return
 	}
-	cfg := s.merged(req)
-	if !cfg.Configured() {
-		writeErr(w, http.StatusBadRequest, "url and username are required")
+	client, ok := backendFor(w, s.merged(req))
+	if !ok {
 		return
 	}
-	client := webdav.New(webdav.Config{
-		URL: cfg.URL, Username: cfg.Username, Password: cfg.Password, Insecure: cfg.Insecure,
-	}, Transport(cfg.Insecure))
 	if err := client.Ping(r.Context()); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -335,13 +377,11 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := s.merged(req)
-	if !cfg.Configured() {
-		writeErr(w, http.StatusBadRequest, "url and username are required")
+	// Built with the configured pacing, since this same client becomes the index's.
+	client, ok := backendFor(w, cfg)
+	if !ok {
 		return
 	}
-	client := webdav.New(webdav.Config{
-		URL: cfg.URL, Username: cfg.Username, Password: cfg.Password, Insecure: cfg.Insecure,
-	}, Transport(cfg.Insecure))
 	if err := client.Ping(r.Context()); err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
@@ -361,7 +401,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if !s.Config().Configured() {
-		writeErr(w, http.StatusBadRequest, "webdav is not configured")
+		writeErr(w, http.StatusBadRequest, "storage is not configured")
 		return
 	}
 	// full=1 re-downloads every manifest instead of trusting the cached copies. It is the
