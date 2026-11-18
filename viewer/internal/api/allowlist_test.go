@@ -20,7 +20,7 @@ func TestParseAllowList(t *testing.T) {
 		{"::1", true},
 		{"192.0.2.22", true},
 		{"10.4.5.6", true},      // inside the CIDR
-		{"192.0.2.21", false}, // the server host is deliberately not allowed
+		{"192.0.2.21", false}, // an unrelated host is deliberately not allowed
 		{"11.0.0.1", false},
 	}
 	for _, tc := range cases {
