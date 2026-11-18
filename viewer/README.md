@@ -133,16 +133,15 @@ server with a fixed disk. Eviction only sheds raw payloads: the catalog and the 
 summaries are never evicted, so the analysis views keep working from data whose source files
 have already been dropped.
 
-### Deployed at home
+### Systemd deployment
 
-This runs as **host `trips`** on server, published behind proxy SSO at
-`viewer.example.com`. `deploy/fct-viewer.service` is the unit; the full procedure —
-container creation, the privilege model, the proxy resource, backups and rollback — is in
-`ops-config/runbooks/deploy-car-tracker-viewer.md`.
+`deploy/fct-viewer.service` is a hardened unit template. Set `-allow-from` to the addresses
+of your reverse proxy and health checks, or configure `-auth`. Keep the service behind TLS
+and an authenticating proxy whenever it is reachable from the network.
 
-Unlike the other-service dashboard next door, this service needs no privilege at all — it reads a
-remote server and writes only its own config and cache — so it runs `NoNewPrivileges=yes` with
-`ProtectSystem=strict` and no sudo grant whatsoever.
+The service needs no privilege at all — it reads a remote server and writes only its own
+config and cache — so it runs `NoNewPrivileges=yes` with `ProtectSystem=strict` and no sudo
+grant whatsoever.
 
 ## Being a good WebDAV client
 

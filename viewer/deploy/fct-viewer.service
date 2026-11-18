@@ -1,9 +1,8 @@
 # /etc/systemd/system/fct-viewer.service
 #
 # The viewer needs no privilege at all: it reads a remote WebDAV server over HTTPS and
-# writes only its own config and cache. That makes it a much smaller target than the
-# other-service dashboard, which has to escalate to reload other-service — so unlike that unit,
-# NoNewPrivileges stays on and ProtectSystem can be strict.
+# writes only its own config and cache. NoNewPrivileges and ProtectSystem=strict limit
+# the impact if the process is compromised.
 #
 # Containment that actually matters here is the source-IP allowlist: the process holds
 # WebDAV credentials, so only the SSO reverse proxy should be able to reach the port.
@@ -24,7 +23,8 @@ Group=fctviewer
 EnvironmentFile=-/etc/fct-viewer/env
 
 # -open=false: there is no browser here.
-# -allow-from: proxy/Traefik on .22, plus the container itself for health checks.
+# -allow-from: replace these documentation addresses with your reverse proxy and
+#              health-check addresses.
 # -cache-max: trip payloads are the only thing that grows; evict least-recently-used
 #             rather than filling the rootfs. Summaries and the catalog are never evicted,
 #             so cross-trip analysis survives eviction of the raw files it came from.
